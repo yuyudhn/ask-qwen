@@ -1,0 +1,21 @@
+[project]
+name = "ask-qwen"
+version = "0.1.0"
+description = "CLI tool untuk berdiskusi dengan Qwen Web (chat.qwen.ai) via UI automation"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.50.0",
+]
+
+[project.scripts]
+ask-qwen = "ask_qwen.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = ["pytest>=8.0.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ask_qwen"]

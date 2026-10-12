@@ -1,0 +1,523 @@
+"""PlaywrightBackend: automasi UI chat.qwen.ai via persistent profile."""
+
+import json
+import logging
+import threading
+
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
+
+from . import config
+
+log = logging.getLogger(__name__)
+
+
+def _playwright_cookies(raw: object) -> list[dict]:
+    """Keep exported cookies compatible with Playwright's cookie schema."""
+    if not isinstance(raw, list):
+        raise ValueError("cookies.json must contain a list of cookies")
+    cookies = []
+    for cookie in raw:
+        if not isinstance(cookie, dict):
+            continue
+        item = dict(cookie)
+        same_site = item.get("sameSite")
+        if isinstance(same_site, str):
+            item["sameSite"] = {"strict": "Strict", "lax": "Lax", "none": "None"}.get(
+                same_site.lower(), "None"
+            )
+        elif "sameSite" in item:
+            item.pop("sameSite")
+        if "partitionKey" in item and not isinstance(item["partitionKey"], str):
+            item.pop("partitionKey")
+        cookies.append(item)
+    return cookies
+
+
+class AuthExpired(Exception):
+    """Cookie/session expired — perlu login manual (headed)."""
+
+
+class WAFChallenge(Exception):
+    """Halaman WAF/punish terdeteksi — bukan masalah login."""
+
+
+class ProfileLocked(Exception):
+    """Persistent profile sedang dipakai instance browser lain."""
+
+
+class PlaywrightBackend:
+    def __init__(self) -> None:
+        self._pw = None
+        self._ctx = None
+        self._page = None
+        self.has_active_chat = False
+        self._operation_lock = threading.RLock()
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def _launch(self, headless: bool = True) -> None:
+        self._close()
+        config.PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        if (config.PROFILE_DIR / "SingletonLock").exists():
+            raise ProfileLocked(
+                "profile Qwen sedang dipakai proses lain; tutup instance "
+                "ask-qwen yang lama lalu coba lagi."
+            )
+        try:
+            self._pw = sync_playwright().start()
+            self._ctx = self._pw.chromium.launch_persistent_context(
+                str(config.PROFILE_DIR),
+                headless=headless,
+                viewport={"width": 1280, "height": 900},
+            )
+            self._page = self._ctx.pages[0] if self._ctx.pages else self._ctx.new_page()
+            if config.COOKIES_FILE.exists():
+                try:
+                    cookies = _playwright_cookies(json.loads(config.COOKIES_FILE.read_text()))
+                    self._ctx.add_cookies(cookies)
+                    log.info("Seeded %d cookies dari cookies.json", len(cookies))
+                except Exception:
+                    log.exception("Gagal seed cookies (lanjut dengan profile saja)")
+        except Exception:
+            self._close()
+            raise
+
+    def _close(self) -> None:
+        # ctx.close() flush storage; pw.stop() matikan driver (close() tidak ada)
+        try:
+            if self._ctx:
+                self._ctx.close()
+        except Exception:
+            log.exception("Gagal menutup browser context")
+        try:
+            if self._pw:
+                self._pw.stop()
+        except Exception:
+            log.exception("Gagal menghentikan driver Playwright")
+        self._ctx = None
+        self._pw = None
+        self._page = None
+
+    def close(self) -> None:
+        with self._operation_lock:
+            self._close()
+            self.has_active_chat = False
+
+    def _ensure_context(self) -> None:
+        if self._ctx is None:
+            self._launch(headless=True)
+
+    @property
+    def page(self):
+        self._ensure_context()
+        return self._page
+
+    # -- auth --------------------------------------------------------------
+
+    def _is_logged_in(self) -> bool:
+        """Logged-in bila chatbox textarea terlihat DAN tombol Log in tidak ada.
+
+        Qwen sekarang menampilkan textarea bahkan untuk user yang belum login,
+        jadi textarea saja tidak cukup — cek juga tidak adanya tombol login.
+
+        Hindari goto ulang bila sudah di chat.qwen.ai: navigasi saat chat
+        aktif me-remount DOM dan bisa menempel pada stream SSE.
+        """
+        page = self.page
+        try:
+            if "chat.qwen.ai" not in (page.url or ""):
+                page.goto(
+                    config.BASE_URL,
+                    timeout=config.NAV_TIMEOUT_MS,
+                    wait_until="domcontentloaded",
+                )
+                if "_____tmd_____" in page.url or "punish" in page.url:
+                    raise WAFChallenge(
+                        "WAF challenge terdeteksi (RGV587). Tunggu sebentar lalu "
+                        "coba lagi; jika terus terjadi, buka chat.qwen.ai di "
+                        "browser biasa sekali lalu ulangi."
+                    )
+            page.wait_for_selector(
+                config.TEXTAREA_SEL, timeout=20_000, state="visible"
+            )
+            # Qwen shows textarea even when logged out; reject if login button visible.
+            # Token refresh via JS can take ~1s, so if login button is present,
+            # wait briefly for it to disappear (refresh_token flow).
+            login_btn = page.locator(config.LOGIN_BTN_SEL)
+            if login_btn.count() > 0 and login_btn.first.is_visible():
+                try:
+                    login_btn.first.wait_for(state="hidden", timeout=5_000)
+                except PWTimeoutError:
+                    return False
+            return True
+        except PWTimeoutError:
+            return False
+
+    # -- pembacaan pesan terstruktur ----------------------------------------
+
+    _EXTRACT_MESSAGES_JS = """(cfg) => {
+      const items = [...document.querySelectorAll(cfg.item)];
+      return items.map(m => {
+        const role = m.classList.contains(cfg.userCls) ? 'user'
+                   : m.classList.contains(cfg.assistantCls) ? 'assistant' : null;
+        const sel = role === 'user' ? cfg.userBody
+                  : role === 'assistant' ? cfg.assistantBody : null;
+        const body = sel ? m.querySelector(sel) : null;
+        return {role: role, text: body ? body.innerText : m.innerText};
+      }).filter(m => m.role && m.text && m.text.trim());
+    }"""
+
+    def _extract_messages(self, page) -> list[dict]:
+        """Pesan chat aktif sebagai [{role, content}] via class .qwen-chat-message."""
+        from .parser import parse_messages
+
+        raw = page.evaluate(
+            self._EXTRACT_MESSAGES_JS,
+            {
+                "item": config.MSG_ITEM_SEL,
+                "userCls": config.MSG_USER_CLS,
+                "assistantCls": config.MSG_ASSISTANT_CLS,
+                "userBody": config.MSG_USER_BODY_SEL,
+                "assistantBody": config.MSG_ASSISTANT_BODY_SEL,
+            },
+        )
+        return parse_messages([(m["role"], m["text"]) for m in raw])
+
+    # -- tools -------------------------------------------------------------
+
+    def ask(self, message: str) -> str:
+        from .parser import extract_answer
+
+        with self._operation_lock:
+            if not self._is_logged_in():
+                raise AuthExpired("Sesi login Qwen kadaluarsa (chatbox tidak ditemukan).")
+
+            page = self.page
+            if not self.has_active_chat:
+                self._new_chat_in_page(page)
+
+            page.wait_for_selector(config.TEXTAREA_SEL, timeout=15_000, state="visible")
+            page.fill(config.TEXTAREA_SEL, message)
+            page.wait_for_selector(config.SEND_BTN_SEL, timeout=10_000)
+            previous_text = page.locator(config.MAIN_SEL).inner_text()
+            page.click(config.SEND_BTN_SEL)
+
+            answer = self._wait_response_done(page, previous_text=previous_text)
+            raw = page.locator(config.MAIN_SEL).inner_text()
+            self.has_active_chat = True
+            return extract_answer(raw, user_message=message) or answer
+
+    def _wait_response_done(self, page, previous_text: str = "") -> str:
+        """Tunggu stream selesai via sinyal tombol Stop (terverifikasi dari
+        DOM Qwen): Stop muncul saat generasi, hilang saat selesai.
+
+        Fallback bila selector Stop berubah: teks stabil + masa tenggang.
+        """
+        import time
+
+        main = page.locator(config.MAIN_SEL)
+        stop = page.locator(config.STOP_BTN_SEL)
+        sent_at = time.monotonic()
+        deadline = sent_at + config.RESPONSE_TIMEOUT_MS / 1000
+        start_deadline = sent_at + config.RESPONSE_START_TIMEOUT_MS / 1000
+        stop_ever_seen = False
+        last_text, stable_since = "", None
+
+        while time.monotonic() < deadline:
+            now = time.monotonic()
+            try:
+                stop_visible = stop.is_visible()
+            except Exception:
+                stop_visible = False
+            if stop_visible:
+                stop_ever_seen = True
+            try:
+                current = main.inner_text()
+            except Exception:
+                current = last_text
+
+            if stop_ever_seen and not stop_visible:
+                return current  # generasi selesai
+
+            if current != last_text:
+                last_text, stable_since = current, now
+            elif (
+                current
+                and current != previous_text
+                and stable_since
+                and (now - stable_since) * 1000 >= config.RESPONSE_STABLE_MS
+                and not stop_visible
+                and (not stop_ever_seen and now - sent_at >= config.RESPONSE_FALLBACK_GRACE_S)
+            ):
+                # ponytail: fallback teks-stabil; risiko salah-deteksi hanya
+                # bila Stop tertunda > masa tenggang, upgrade ke SSE bila perlu
+                return current
+
+            if (
+                not stop_ever_seen
+                and now >= start_deadline
+                and current == previous_text
+            ):
+                raise PWTimeoutError(
+                    "Respons Qwen tidak dimulai (pesan mungkin gagal terkirim)."
+                )
+            time.sleep(config.POLL_INTERVAL_S)
+
+        raise PWTimeoutError("Respons Qwen tidak selesai dalam batas waktu.")
+
+    def _new_chat_in_page(self, page) -> None:
+        try:
+            page.click(config.NEW_CHAT_BTN_SEL, timeout=10_000)
+            page.wait_for_selector(config.TEXTAREA_SEL, timeout=15_000)
+        except PWTimeoutError:
+            # di halaman home, chatbox langsung tersedia tanpa tombol New Chat
+            page.goto(config.BASE_URL, timeout=config.NAV_TIMEOUT_MS)
+            page.wait_for_selector(config.TEXTAREA_SEL, timeout=15_000)
+
+    def new_chat(self) -> str:
+        with self._operation_lock:
+            self._ensure_context()
+            page = self.page
+            self._new_chat_in_page(page)
+            self.has_active_chat = True
+            return "Chat baru siap."
+
+    def stop_generation(self) -> str:
+        with self._operation_lock:
+            if not self._is_logged_in():
+                raise AuthExpired("Sesi login Qwen kadaluarsa.")
+            stop = self.page.locator(config.STOP_BTN_SEL)
+            if not stop.is_visible():
+                return "Tidak ada generasi aktif."
+            stop.click()
+            return "Generasi dihentikan."
+
+    def get_status(self) -> dict:
+        with self._operation_lock:
+            logged_in = self._is_logged_in()
+            page = self.page
+            try:
+                generating = page.locator(config.STOP_BTN_SEL).is_visible()
+            except Exception:
+                generating = False
+            return {
+                "logged_in": logged_in,
+                "generating": generating,
+                "active_chat": self.has_active_chat,
+                "url": page.url,
+            }
+
+    def read(self) -> list[dict]:
+        """Baca pesan chat aktif sebagai [{role: user|assistant, content}]."""
+        with self._operation_lock:
+            if not self._is_logged_in():
+                raise AuthExpired("Sesi login Qwen kadaluarsa.")
+            page = self.page
+            messages = self._extract_messages(page)
+            if messages:
+                return messages
+            # fallback toleran: struktur DOM berubah → snapshot mentah
+            raw = page.locator(config.MAIN_SEL).inner_text()
+            cleaned = "\n".join(
+                line for line in raw.splitlines()
+                if line.strip() and line.strip() != "Auto"
+            ).strip()
+            return [{"role": "transcript", "content": cleaned}] if cleaned else []
+
+    def list_chats(self, limit: int = 20) -> list[dict]:
+        """Daftar chat di sidebar. Item tidak punya href → URL diperoleh
+        dengan mengklik tiap item (SPA routing) dan membaca location.href."""
+        with self._operation_lock:
+            if not self._is_logged_in():
+                raise AuthExpired("Sesi login Qwen kadaluarsa.")
+            page = self.page
+            try:
+                # daftar chat termuat lazily setelah chatbox — tunggu sebentar
+                page.wait_for_selector(
+                    config.CHAT_HISTORY_SEL, timeout=10_000, state="attached"
+                )
+            except PWTimeoutError:
+                return []  # riwayat kosong atau tidak termuat
+            original_url = page.url
+            chats: list[dict] = []
+            seen_urls: set[str] = set()
+            index = 0
+            stale_clicks = 0
+            while len(chats) < limit and stale_clicks < 3:
+                items = page.locator(config.CHAT_HISTORY_SEL)
+                if index >= items.count():
+                    break
+                item = items.nth(index)
+                index += 1
+                try:
+                    title = item.inner_text().strip()
+                except Exception:
+                    continue
+                if not title:
+                    continue
+                before = page.url
+                try:
+                    item.click(timeout=5_000)
+                    page.wait_for_function(
+                        "u => location.href !== u", arg=before, timeout=8_000
+                    )
+                except PWTimeoutError:
+                    # klik tidak mengubah URL (mis. sudah di chat itu)
+                    if page.url == before and "/c/" not in before:
+                        stale_clicks += 1
+                        continue
+                url = page.url
+                if "/c/" in url and url not in seen_urls:
+                    seen_urls.add(url)
+                    chats.append({"title": title, "url": url})
+            # kembalikan halaman semula
+            if page.url != original_url and "chat.qwen.ai" in original_url:
+                try:
+                    page.goto(
+                        original_url,
+                        timeout=config.NAV_TIMEOUT_MS,
+                        wait_until="domcontentloaded",
+                    )
+                except Exception:
+                    log.exception("Gagal mengembalikan halaman semula setelah list_chats")
+            return chats
+
+    def search_chats(self, query: str) -> list[dict]:
+        query = (query or "").strip()
+        if not query:
+            raise ValueError("query must not be empty")
+        with self._operation_lock:
+            if not self._is_logged_in():
+                raise AuthExpired("Sesi login Qwen kadaluarsa.")
+            page = self.page
+            search = page.locator(config.SEARCH_INPUT_SEL)
+            search.fill(query)
+            try:
+                page.wait_for_selector(
+                    config.CHAT_HISTORY_SEL, timeout=10_000, state="attached"
+                )
+                return self.list_chats(config.MAX_HISTORY_ITEMS)
+            finally:
+                search.fill("")
+
+    def read_chat(self, url: str) -> list[dict]:
+        """Buka chat lama berdasarkan URL chat.qwen.ai/c/... dan baca
+        seluruh isinya sebagai [{role, content}]."""
+        if not url.startswith(config.BASE_URL + "/c/"):
+            raise ValueError("URL chat harus berasal dari chat.qwen.ai.")
+        with self._operation_lock:
+            if not self._is_logged_in():
+                raise AuthExpired("Sesi login Qwen kadaluarsa.")
+            page = self.page
+            previous_url = page.url
+            page.goto(url, timeout=config.NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+            try:
+                page.wait_for_selector(
+                    config.MSG_ITEM_SEL, timeout=15_000, state="attached"
+                )
+            except PWTimeoutError:
+                messages = []
+            else:
+                messages = self._extract_messages(page)
+            if previous_url != url and "chat.qwen.ai" in previous_url:
+                try:
+                    page.goto(
+                        previous_url,
+                        timeout=config.NAV_TIMEOUT_MS,
+                        wait_until="domcontentloaded",
+                    )
+                    page.wait_for_selector(
+                        config.TEXTAREA_SEL, timeout=15_000, state="visible"
+                    )
+                except Exception:
+                    log.exception("Gagal kembali ke halaman semula setelah read_chat")
+            return messages
+
+    def open_chat(self, url: str) -> list[dict]:
+        """Buka chat lama berdasarkan URL chat.qwen.ai/c/... dan JADIKAN chat
+        aktif: ask() berikutnya melanjutkan chat ini (tanpa New Chat)."""
+        if not url.startswith(config.BASE_URL + "/c/"):
+            raise ValueError("URL chat harus berasal dari chat.qwen.ai.")
+        with self._operation_lock:
+            if not self._is_logged_in():
+                raise AuthExpired("Sesi login Qwen kadaluarsa.")
+            page = self.page
+            page.goto(url, timeout=config.NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+            page.wait_for_selector(
+                config.TEXTAREA_SEL, timeout=15_000, state="visible"
+            )
+            self.has_active_chat = True
+            try:
+                page.wait_for_selector(
+                    config.MSG_ITEM_SEL, timeout=10_000, state="attached"
+                )
+                messages = self._extract_messages(page)
+            except PWTimeoutError:
+                messages = []
+            return messages
+
+    def set_mode(self, mode: str) -> str:
+        """Ubah mode/thinking selector di area input.
+
+        Mode terverifikasi dari DOM Qwen: auto, thinking, fast.
+        """
+        mode = (mode or "").strip().lower()
+        if mode not in config.MODES:
+            raise ValueError(
+                f"Mode tidak dikenal: {mode!r}. Pilihan: {', '.join(config.MODES)}."
+            )
+        with self._operation_lock:
+            if not self._is_logged_in():
+                raise AuthExpired("Sesi login Qwen kadaluarsa.")
+            page = self.page
+            page.locator(config.MODE_TRIGGER_SEL).click(timeout=10_000)
+            page.wait_for_selector(
+                config.MODE_ITEM_SEL, timeout=5_000, state="visible"
+            )
+            items = page.locator(config.MODE_ITEM_SEL)
+            for index in range(items.count()):
+                item = items.nth(index)
+                if item.inner_text().strip().lower() == mode:
+                    item.click()
+                    return f"Mode diatur ke {mode.capitalize()}."
+            raise ValueError(
+                f"Mode '{mode}' tidak ditemukan di dropdown Qwen "
+                f"(opsi berubah? lihat config.MODE_*)."
+            )
+
+    # -- login flow --------------------------------------------------------
+
+    def ensure_login_headed(self) -> bool:
+        """Relaunch headed, tunggu user login manual, lalu kembali headless.
+
+        Cookie otomatis tersimpan di persistent profile saat login.
+        """
+        with self._operation_lock:
+            print("Membuka browser untuk login manual ke chat.qwen.ai ...")
+            print("Selesaikan login di jendela yang terbuka (maks 5 menit).")
+            self._launch(headless=False)
+            try:
+                self.page.goto(config.BASE_URL, timeout=config.NAV_TIMEOUT_MS)
+            except PWTimeoutError:
+                pass
+
+            import time
+
+            deadline = time.monotonic() + config.LOGIN_TIMEOUT_S
+            while time.monotonic() < deadline:
+                try:
+                    self.page.wait_for_selector(
+                        config.TEXTAREA_SEL, timeout=config.LOGIN_POLL_S * 1000
+                    )
+                    # Textarea visible even when logged out; wait until login button gone
+                    login_btn = self.page.locator(config.LOGIN_BTN_SEL)
+                    if login_btn.count() > 0 and login_btn.first.is_visible():
+                        continue
+                    print("Login berhasil.")
+                    self._launch(headless=True)  # kembali headless dengan cookie baru
+                    return True
+                except PWTimeoutError:
+                    continue
+            print("Timeout login. Coba lagi dengan `ask-qwen login`.")
+            self._launch(headless=True)
+            return False
