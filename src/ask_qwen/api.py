@@ -302,10 +302,12 @@ def _feature_config(state: dict) -> tuple[str, dict]:
     return model, fc
 
 
-def stream_ask(message: str, on_delta=None, chat_id: str | None = None) -> dict:
+def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase=None) -> dict:
     """Kirim pesan ke Qwen dan stream jawabannya — murni HTTP, tanpa browser.
 
     - on_delta(chunk): callback teks answer-phase saat streaming.
+    - on_phase(phase, chunk): callback fase non-answer ("think",
+      "code_interpreter") — untuk tampilan progres di stderr.
     - Lanjutkan chat dari state.json (active_chat_id) atau chat_id arg;
       buat chat baru bila belum ada.
     - Stop lintas-proses: state.json stop_requested (ditulis cmd stop).
@@ -415,10 +417,13 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None) -> dict:
                 response_id = created["response_id"]
             for ch in obj.get("choices") or []:
                 delta = (ch.get("delta") or {})
-                if delta.get("phase") == "answer" and delta.get("content"):
-                    answer_parts.append(delta["content"])
-                    if on_delta:
-                        on_delta(delta["content"])
+                if delta.get("content"):
+                    if delta.get("phase") == "answer":
+                        answer_parts.append(delta["content"])
+                        if on_delta:
+                            on_delta(delta["content"])
+                    elif on_phase:
+                        on_phase(delta.get("phase") or "?", delta["content"])
             if obj.get("usage"):
                 usage = obj["usage"]
 

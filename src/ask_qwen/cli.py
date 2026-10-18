@@ -58,12 +58,55 @@ class _Spinner:
 
 def cmd_ask(args) -> None:
     message = " ".join(args.message)
-    with _Spinner():
-        result = _run(api.stream_ask, message)
-    if args.json:
-        _print_json(result)
+    if sys.stdout.isatty():
+        # TTY: jawaban mengalir langsung ke stdout; --verbose menampilkan
+        # fase think/code_interpreter ke stderr. Piped: tetap satu jawaban
+        # bersih di akhir agar aman untuk konsumsi agen.
+        first = {"answer": True, "phase": None}
+        spinner = _Spinner()
+        spinner.__enter__()
+        stopped = {"v": False}
+
+        def _stop_spinner() -> None:
+            if not stopped["v"]:
+                stopped["v"] = True
+                if first["phase"] is not None:
+                    sys.stderr.write("\n")  # jaga teks fase dari clear-line
+                spinner.__exit__()
+
+        def _live(chunk: str) -> None:
+            _stop_spinner()
+            if first["answer"]:
+                first["answer"] = False
+                print()
+            print(chunk, end="", flush=True)
+
+        def _verbose(phase: str, chunk: str) -> None:
+            _stop_spinner()
+            if first["phase"] != phase:
+                first["phase"] = phase
+                sys.stderr.write(f"\n[{phase}] ")
+            sys.stderr.write(chunk)
+            sys.stderr.flush()
+
+        on_phase = _verbose if args.verbose else None
+        try:
+            result = api.stream_ask(message, on_delta=_live, on_phase=on_phase)
+        finally:
+            _stop_spinner()
+        if not first["answer"]:  # sudah streaming — cukup newline penutup
+            print()
+        elif args.json:
+            _print_json(result)
+        else:
+            print(result["answer"])
     else:
-        print(result["answer"])
+        with _Spinner():
+            result = _run(api.stream_ask, message)
+        if args.json:
+            _print_json(result)
+        else:
+            print(result["answer"])
 
 
 def cmd_read(args) -> None:
@@ -182,6 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("ask", help="Send a message and get the answer")
     p.add_argument("message", nargs="+", help="Message to send")
     p.add_argument("--json", action="store_true", help="Machine-readable output (answer, chat_id, usage, model)")
+    p.add_argument("-v", "--verbose", action="store_true", help="Show thinking/code_interpreter phases on stderr (TTY)")
     p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("read", help="Read the active chat transcript")
