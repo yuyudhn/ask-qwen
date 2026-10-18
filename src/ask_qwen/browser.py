@@ -102,6 +102,7 @@ class PlaywrightBackend:
         self._page = None
         self.has_active_chat = False
         self.applied_mode: str | None = None  # thinking mode terakhir diterapkan
+        self.applied_model: str | None = None  # model LLM terakhir diterapkan
         # Permintaan stop lintas-thread: RPC handler men-set; poll loop ask
         # (thread browser) yang mengklik Stop dan mengonsumsi. Semantik: batalkan
         # generasi yang sedang/sedang-akan berjalan; natural completion membersihkan.
@@ -608,6 +609,26 @@ class PlaywrightBackend:
             except PWTimeoutError:
                 messages = []
             return messages
+
+    def apply_model(self, model_id: str) -> str:
+        """Pilih model LLM via URL ?model= + reload.
+
+        Store model frontend tidak di-persist; boot membaca query ?model=
+        (chat.models server-side hanya meng-override bila terisi). Setelah
+        reload, store ter-init dengan model yang diminta dan dipakai request
+        completions berikutnya.
+        """
+        with self._operation_lock:
+            if self.applied_model == model_id:
+                return f"Model sudah {model_id}."
+            page = self.page
+            base = page.url.split("?")[0] if "/c/" in (page.url or "") else config.BASE_URL
+            page.goto(f"{base}?model={model_id}", timeout=config.NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+            page.wait_for_selector(
+                config.TEXTAREA_SEL, timeout=config.NAV_TIMEOUT_MS, state="visible"
+            )
+            self.applied_model = model_id
+            return f"Model diatur ke {model_id}."
 
     def apply_thinking_mode(self, label: str) -> str:
         """Terapkan thinking mode ke store frontend via localStorage + reload.

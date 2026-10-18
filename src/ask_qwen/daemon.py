@@ -19,7 +19,7 @@ log = logging.getLogger("ask_qwen.daemon")
 
 _METHODS = (
     "ask", "read", "new_chat", "list_chats", "read_chat",
-    "open_chat", "set_mode", "stop_generation", "get_status",
+    "open_chat", "set_mode", "set_model", "stop_generation", "get_status",
     "search_chats", "ping",
 )
 

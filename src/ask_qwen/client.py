@@ -75,6 +75,9 @@ class QwenWebClient:
         mode = api.load_state().get("thinking_mode")
         if mode and self.backend.applied_mode != mode:
             self.backend.apply_thinking_mode(mode)
+        model = api.load_state().get("model")
+        if model and self.backend.applied_model != model:
+            self.backend.apply_model(model)
         result = self.backend.ask(message, on_delta)
         # catat chat aktif agar perintah CLI lain (read via API) tahu chat id
         self._record_active_chat()
@@ -174,6 +177,19 @@ class QwenWebClient:
     def _set_mode_once(self, label: str) -> str:
         try:
             return self.backend.apply_thinking_mode(label)
+        except AuthExpired:
+            return "Login Qwen kadaluarsa. Jalankan `ask-qwen login`."
+
+    def set_model(self, model_id: str) -> str:
+        """Persist model LLM; daemon menerapkannya via URL ?model=."""
+        from . import api
+
+        api.set_model(model_id)
+        return self._run(self._set_model_once, model_id)
+
+    def _set_model_once(self, model_id: str) -> str:
+        try:
+            return self.backend.apply_model(model_id)
         except AuthExpired:
             return "Login Qwen kadaluarsa. Jalankan `ask-qwen login`."
 

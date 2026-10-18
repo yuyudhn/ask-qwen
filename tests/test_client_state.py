@@ -18,6 +18,7 @@ class FakeBackend:
         self.calls: list[str] = []
         self.active = False
         self.applied_mode = None
+        self.applied_model = None
         self.stop_flags = 0
 
     def ask(self, message: str, on_delta=None) -> str:
@@ -76,6 +77,11 @@ class FakeBackend:
         self.calls.append(f"apply_thinking_mode:{label}")
         self.applied_mode = label
         return f"Mode diatur ke {label}."
+
+    def apply_model(self, model_id: str) -> str:
+        self.calls.append(f"apply_model:{model_id}")
+        self.applied_model = model_id
+        return f"Model diatur ke {model_id}."
 
     def stop_generation(self) -> str:
         self.calls.append("stop_generation")
@@ -233,6 +239,15 @@ class TestClientState:
         c = QwenWebClient(backend=b)
         c.ask("halo")
         assert b.calls == ["new_chat", "apply_thinking_mode:Thinking", "ask:halo"]
+
+    def test_ask_applies_pending_model(self, monkeypatch):
+        from ask_qwen import api
+
+        monkeypatch.setattr("ask_qwen.api.load_state", lambda: {"model": "qwen3.6-plus"})
+        b = FakeBackend()
+        c = QwenWebClient(backend=b)
+        c.ask("halo")
+        assert b.calls == ["new_chat", "apply_model:qwen3.6-plus", "ask:halo"]
 
     def test_stop_generation_sets_flag_directly(self):
         b = FakeBackend()

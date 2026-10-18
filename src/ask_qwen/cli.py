@@ -173,6 +173,28 @@ def cmd_set_mode(args) -> None:
         print(f"Mode diatur ke {mode.capitalize()} (diterapkan saat ask berikutnya).")
 
 
+def cmd_model(args) -> None:
+    from . import api
+
+    if not args.model_id:  # tampilkan daftar + yang aktif
+        current = api.get_model()
+        items = _run(api.list_models)
+        for m in items:
+            mark = "*" if m["id"] == current else " "
+            print(f"{mark} {m['id']:<24} {m['name']}")
+        return
+    model_id = args.model_id.strip()
+    known = {m["id"] for m in _run(api.list_models)}
+    if model_id not in known:
+        print(f"Error: model tidak dikenal: {model_id!r}. Lihat: ask-qwen model", file=sys.stderr)
+        raise SystemExit(1)
+    api.set_model(model_id)
+    if daemon.is_running():
+        print(_run(_get_client().set_model, model_id))
+    else:
+        print(f"Model diatur ke {model_id} (diterapkan saat ask berikutnya).")
+
+
 def cmd_stop(args) -> None:
     # Stop mid-flight HANYA bisa lewat flag lintas-thread di daemon: RPC biasa
     # antri di belakang ask (executor single-thread), API server-side tidak bisa
@@ -253,6 +275,16 @@ def cmd_interactive(args) -> None:
         if line.startswith("/mode "):
             print(_run(client.set_mode, line[6:].strip()))
             continue
+        if line.startswith("/model "):
+            print(_run(client.set_model, line[7:].strip()))
+            continue
+        if line == "/model":
+            from . import api
+
+            cur = api.get_model()
+            for m in _run(api.list_models):
+                print(("* " if m["id"] == cur else "  ") + f"{m['id']:<24} {m['name']}")
+            continue
         try:
             _ask_streaming(client, line)
         except Exception as e:
@@ -294,6 +326,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("stop", help="Stop active generation")
     p.set_defaults(func=cmd_stop)
+
+    p = sub.add_parser("model", help="List or set the LLM model")
+    p.add_argument("model_id", nargs="?", help="Model id (e.g. qwen3.6-plus); omit to list")
+    p.set_defaults(func=cmd_model)
 
     p = sub.add_parser("status", help="Show login/chat/generation status")
     p.set_defaults(func=cmd_status)

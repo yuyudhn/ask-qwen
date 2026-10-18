@@ -214,3 +214,31 @@ def set_thinking_mode(label: str) -> None:
 
 def get_thinking_mode() -> str | None:
     return load_state().get("thinking_mode")
+
+
+# Model LLM bersifat per-request (field `model` di completions) dan store
+# frontend tidak di-persist (modelsStore persist disabled) — dipilih dari URL
+# ?model= saat boot atau dari chat.models bila ada. Tidak ada endpoint untuk
+# men-setnya server-side (semua bentuk updateChatById {status:true} tapi tak
+# ter-persist — verified live).
+
+
+def list_models() -> list[dict]:
+    """Model yang tersedia: GET /api/v2/models/ → [{id, name}, ...].
+
+    Envelope dobel: body.data berisi {data: [...]} (verified live)."""
+    data = _request("GET", "/api/v2/models/")
+    if isinstance(data, dict):
+        data = data.get("data") or data.get("models") or []
+    items = data if isinstance(data, list) else []
+    return [{"id": m["id"], "name": m.get("name") or m.get("modelName") or m["id"]} for m in items if isinstance(m, dict)]
+
+
+def set_model(model_id: str) -> None:
+    state = load_state()
+    state["model"] = model_id
+    save_state(state)
+
+
+def get_model() -> str | None:
+    return load_state().get("model")
