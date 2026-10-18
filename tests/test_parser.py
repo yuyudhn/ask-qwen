@@ -1,4 +1,4 @@
-from ask_qwen.parser import clean_message, extract_answer, parse_messages
+from ask_qwen.parser import extract_answer
 
 # Fixture: pola hasil verifikasi live 2026-09-08.
 # inner_text() <main> saat dropdown reasoning COLLAPSED: isi reasoning
@@ -35,7 +35,6 @@ class TestExtractAnswer:
         # label mode (Auto/Thinking/Fast) di area input ikut ter-capture di <main>
         for mode in ("Auto", "Thinking", "Fast"):
             assert extract_answer(f"jawaban\n{mode}") == "jawaban"
-            assert clean_message("assistant", f"jawaban\n{mode}") == "jawaban"
 
     def test_multiline_answer_preserved(self):
         text = "tanya\n\nThinking completed\n\nbaris 1\nbaris 2"
@@ -52,44 +51,6 @@ class TestExtractAnswer:
     def test_no_marker_no_user(self):
         assert extract_answer("plain answer") == "plain answer"
 
-
-class TestParseMessages:
-    def test_user_and_assistant_pair(self):
-        pairs = [
-            ("user", "pertanyaan user"),
-            ("assistant", "Thinking completed\njawaban asisten"),
-        ]
-        assert parse_messages(pairs) == [
-            {"role": "user", "content": "pertanyaan user"},
-            {"role": "assistant", "content": "jawaban asisten"},
-        ]
-
-    def test_multi_turn_order_preserved(self):
-        pairs = [
-            ("user", "satu"),
-            ("assistant", "Thinking completed\njawaban satu"),
-            ("user", "dua"),
-            ("assistant", "Thinking completed\njawaban dua"),
-        ]
-        result = parse_messages(pairs)
-        assert [m["role"] for m in result] == ["user", "assistant", "user", "assistant"]
-        assert result[3]["content"] == "jawaban dua"
-
-    def test_assistant_disclaimer_stripped_per_message(self):
-        result = parse_messages(
-            [("assistant", "Thinking completed\njawaban\nAI-generated content may not be accurate.")]
-        )
-        assert result == [{"role": "assistant", "content": "jawaban"}]
-
-    def test_empty_messages_dropped(self):
-        assert parse_messages([("user", "  \n "), ("assistant", "")]) == []
-
-    def test_clean_user_keeps_text_as_is(self):
-        # _strip_noise_lines memang membuang baris kosong — itu perilaku eksisting
-        assert clean_message("user", "halo\n\ndunia") == "halo\ndunia"
-
-    def test_clean_assistant_without_marker(self):
-        assert clean_message("assistant", "jawaban langsung") == "jawaban langsung"
 
 
 # Fixture: Qwen A/B comparison UI (live 2026-10-12)
@@ -125,15 +86,3 @@ class TestComparisonUI:
     def test_normal_text_unaffected_by_comparison_strip(self):
         assert extract_answer(DOM_TEXT, user_message="Balas hanya dengan kata: OK") == "OK"
 
-    def test_clean_message_strips_comparison(self):
-        raw = """This feedback will help us evaluate and improve Qwen's performance.
-Which response do you prefer? Select one to continue.
-Response 1
-Thinking completed
-hello world
-I prefer this response
-Response 2
-Thinking completed
-hello world
-I prefer this response"""
-        assert clean_message("assistant", raw) == "hello world"

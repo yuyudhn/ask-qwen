@@ -30,30 +30,13 @@ class FakeClient:
         yield "partial\n"
         yield "answer\n"
 
-    def read(self):
-        self.calls.append(("read",))
-        self._maybe_raise()
-        return [{"role": "assistant", "content": "hello"}]
 
     def new_chat(self):
         self.calls.append(("new_chat",))
         self._maybe_raise()
         return "Chat baru siap."
 
-    def list_chats(self, limit):
-        self.calls.append(("list_chats", limit))
-        self._maybe_raise()
-        return [{"title": "test", "url": "https://chat.qwen.ai/c/1"}]
 
-    def read_chat(self, url):
-        self.calls.append(("read_chat", url))
-        self._maybe_raise()
-        return [{"role": "user", "content": "hi"}]
-
-    def open_chat(self, url):
-        self.calls.append(("open_chat", url))
-        self._maybe_raise()
-        return [{"role": "user", "content": "hi"}]
 
     def set_mode(self, mode):
         self.calls.append(("set_mode", mode))
@@ -65,15 +48,7 @@ class FakeClient:
         self._maybe_raise()
         return "Stop request diterima."
 
-    def get_status(self):
-        self.calls.append(("status",))
-        self._maybe_raise()
-        return {"logged_in": True, "generating": False}
 
-    def search_chats(self, query):
-        self.calls.append(("search", query))
-        self._maybe_raise()
-        return [{"title": "found", "url": "https://chat.qwen.ai/c/2"}]
 
     def close(self):
         pass

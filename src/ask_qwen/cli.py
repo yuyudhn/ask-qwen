@@ -289,7 +289,10 @@ def cmd_interactive(args) -> None:
             print(_run(client.new_chat))
             continue
         if line == "/read":
-            _print_json(_run(client.read))
+            try:
+                cmd_read(None)  # jalur API (state.json), bukan daemon
+            except SystemExit:
+                pass  # pesan error sudah tercetak
             continue
         if line == "/status":
             _print_json(_api_status())

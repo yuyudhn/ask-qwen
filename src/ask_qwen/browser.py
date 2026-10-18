@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-import re
 import threading
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
@@ -12,33 +11,6 @@ from . import config
 
 log = logging.getLogger(__name__)
 
-_CHAT_ID_RE = re.compile(r"[A-Za-z0-9_-]{6,}")
-
-
-def normalize_chat_ref(ref: str) -> str:
-    """Terima URL chat penuh atau chat ID polos (dari `list`), kembalikan URL."""
-    ref = (ref or "").strip()
-    if ref.startswith(config.BASE_URL + "/c/"):
-        return ref
-    if _CHAT_ID_RE.fullmatch(ref):
-        return f"{config.BASE_URL}/c/{ref}"
-    raise ValueError(
-        f"Referensi chat tidak valid: {ref!r}. Pakai URL "
-        f"{config.BASE_URL}/c/... atau chat ID dari `ask-qwen list`."
-    )
-
-
-def _raise_if_generating(page) -> None:
-    """list/search mengklik-klik sidebar dan membunuh stream yang sedang jalan."""
-    try:
-        generating = page.locator(config.STOP_BTN_SEL).is_visible()
-    except Exception:
-        return  # status generasi tidak terbaca — jangan blokir
-    if generating:
-        raise RuntimeError(
-            "Generasi sedang berjalan; perintah ini akan mengganggu stream. "
-            "Tunggu selesai atau jalankan `ask-qwen stop`."
-        )
 
 
 def _load_auth() -> dict | None:
@@ -49,15 +21,6 @@ def _load_auth() -> dict | None:
         return load_auth()
     except Exception:
         log.exception("Gagal baca auth.json")
-        return None
-
-
-def _get_thinking_mode() -> str | None:
-    try:
-        from .api import get_thinking_mode
-
-        return get_thinking_mode()
-    except Exception:
         return None
 
 
@@ -231,36 +194,6 @@ class PlaywrightBackend:
 
     # -- pembacaan pesan terstruktur ----------------------------------------
 
-    _EXTRACT_MESSAGES_JS = """(cfg) => {
-      const items = [...document.querySelectorAll(cfg.item)];
-      return items.map(m => {
-        const role = m.classList.contains(cfg.userCls) ? 'user'
-                   : m.classList.contains(cfg.assistantCls) ? 'assistant' : null;
-        const sel = role === 'user' ? cfg.userBody
-                  : role === 'assistant' ? cfg.assistantBody : null;
-        const body = sel ? m.querySelector(sel) : null;
-        return {role: role, text: body ? body.innerText : m.innerText};
-      }).filter(m => m.role && m.text && m.text.trim());
-    }"""
-
-    def _extract_messages(self, page) -> list[dict]:
-        """Pesan chat aktif sebagai [{role, content}] via class .qwen-chat-message."""
-        from .parser import parse_messages
-
-        raw = page.evaluate(
-            self._EXTRACT_MESSAGES_JS,
-            {
-                "item": config.MSG_ITEM_SEL,
-                "userCls": config.MSG_USER_CLS,
-                "assistantCls": config.MSG_ASSISTANT_CLS,
-                "userBody": config.MSG_USER_BODY_SEL,
-                "assistantBody": config.MSG_ASSISTANT_BODY_SEL,
-            },
-        )
-        return parse_messages([(m["role"], m["text"]) for m in raw])
-
-    # -- tools -------------------------------------------------------------
-
     def ask(self, message: str, on_delta=None) -> str:
         from .parser import extract_answer
 
@@ -417,16 +350,6 @@ class PlaywrightBackend:
             self.has_active_chat = True
             return f"Chat dibuka: {url}"
 
-    def stop_generation(self) -> str:
-        with self._operation_lock:
-            if not self._is_logged_in():
-                raise AuthExpired("Sesi login Qwen kadaluarsa.")
-            stop = self.page.locator(config.STOP_BTN_SEL)
-            if not stop.is_visible():
-                return "Tidak ada generasi aktif."
-            stop.click()
-            return "Generasi dihentikan."
-
     def request_stop(self) -> None:
         """Minta generasi yang sedang/akan berjalan berhenti (aman lintas thread).
 
@@ -435,180 +358,6 @@ class PlaywrightBackend:
         belakang ask yang sedang berjalan).
         """
         self._stop_pending = True
-
-    def get_status(self) -> dict:
-        with self._operation_lock:
-            # Login status via probe API (Bearer), bukan heuristic DOM —
-            # Qwen sering mengubah struktur halaman (lihat dev-notes).
-            try:
-                from .auth import session_ok
-
-                logged_in = session_ok()
-            except Exception:
-                log.exception("session_ok gagal")
-                logged_in = False
-            page = self.page
-            try:
-                generating = page.locator(config.STOP_BTN_SEL).is_visible()
-            except Exception:
-                generating = False
-            return {
-                "logged_in": logged_in,
-                "generating": generating,
-                "active_chat": self.has_active_chat,
-                "thinking_mode": _get_thinking_mode(),
-                "url": page.url,
-            }
-
-    def read(self) -> list[dict]:
-        """Baca pesan chat aktif sebagai [{role: user|assistant, content}]."""
-        with self._operation_lock:
-            if not self._is_logged_in():
-                raise AuthExpired("Sesi login Qwen kadaluarsa.")
-            page = self.page
-            messages = self._extract_messages(page)
-            if messages:
-                return messages
-            # fallback toleran: struktur DOM berubah → snapshot mentah
-            raw = page.locator(config.MAIN_SEL).inner_text()
-            cleaned = "\n".join(
-                line for line in raw.splitlines()
-                if line.strip() and line.strip() != "Auto"
-            ).strip()
-            return [{"role": "transcript", "content": cleaned}] if cleaned else []
-
-    def list_chats(self, limit: int = 20) -> list[dict]:
-        """Daftar chat di sidebar. Item tidak punya href → URL diperoleh
-        dengan mengklik tiap item (SPA routing) dan membaca location.href."""
-        with self._operation_lock:
-            if not self._is_logged_in():
-                raise AuthExpired("Sesi login Qwen kadaluarsa.")
-            page = self.page
-            _raise_if_generating(page)
-            try:
-                # daftar chat termuat lazily setelah chatbox — tunggu sebentar
-                page.wait_for_selector(
-                    config.CHAT_HISTORY_SEL, timeout=10_000, state="attached"
-                )
-            except PWTimeoutError:
-                return []  # riwayat kosong atau tidak termuat
-            original_url = page.url
-            chats: list[dict] = []
-            seen_urls: set[str] = set()
-            index = 0
-            stale_clicks = 0
-            while len(chats) < limit and stale_clicks < 3:
-                items = page.locator(config.CHAT_HISTORY_SEL)
-                if index >= items.count():
-                    break
-                item = items.nth(index)
-                index += 1
-                try:
-                    title = item.inner_text().strip()
-                except Exception:
-                    continue
-                if not title:
-                    continue
-                before = page.url
-                try:
-                    item.click(timeout=5_000)
-                    page.wait_for_function(
-                        "u => location.href !== u", arg=before, timeout=8_000
-                    )
-                except PWTimeoutError:
-                    # klik tidak mengubah URL (mis. sudah di chat itu)
-                    if page.url == before and "/c/" not in before:
-                        stale_clicks += 1
-                        continue
-                url = page.url
-                if "/c/" in url and url not in seen_urls:
-                    seen_urls.add(url)
-                    chats.append({"title": title, "url": url, "id": url.rsplit("/c/", 1)[-1]})
-            # kembalikan halaman semula
-            if page.url != original_url and "chat.qwen.ai" in original_url:
-                try:
-                    page.goto(
-                        original_url,
-                        timeout=config.NAV_TIMEOUT_MS,
-                        wait_until="domcontentloaded",
-                    )
-                except Exception:
-                    log.exception("Gagal mengembalikan halaman semula setelah list_chats")
-            return chats
-
-    def search_chats(self, query: str) -> list[dict]:
-        query = (query or "").strip()
-        if not query:
-            raise ValueError("query must not be empty")
-        with self._operation_lock:
-            if not self._is_logged_in():
-                raise AuthExpired("Sesi login Qwen kadaluarsa.")
-            page = self.page
-            search = page.locator(config.SEARCH_INPUT_SEL)
-            search.fill(query)
-            try:
-                page.wait_for_selector(
-                    config.CHAT_HISTORY_SEL, timeout=10_000, state="attached"
-                )
-                return self.list_chats(config.MAX_HISTORY_ITEMS)
-            finally:
-                search.fill("")
-
-    def read_chat(self, url: str) -> list[dict]:
-        """Buka chat lama berdasarkan URL chat.qwen.ai/c/... dan baca
-        seluruh isinya sebagai [{role, content}]."""
-        if not url.startswith(config.BASE_URL + "/c/"):
-            raise ValueError("URL chat harus berasal dari chat.qwen.ai.")
-        with self._operation_lock:
-            if not self._is_logged_in():
-                raise AuthExpired("Sesi login Qwen kadaluarsa.")
-            page = self.page
-            previous_url = page.url
-            page.goto(url, timeout=config.NAV_TIMEOUT_MS, wait_until="domcontentloaded")
-            try:
-                page.wait_for_selector(
-                    config.MSG_ITEM_SEL, timeout=15_000, state="attached"
-                )
-            except PWTimeoutError:
-                messages = []
-            else:
-                messages = self._extract_messages(page)
-            if previous_url != url and "chat.qwen.ai" in previous_url:
-                try:
-                    page.goto(
-                        previous_url,
-                        timeout=config.NAV_TIMEOUT_MS,
-                        wait_until="domcontentloaded",
-                    )
-                    page.wait_for_selector(
-                        config.TEXTAREA_SEL, timeout=15_000, state="visible"
-                    )
-                except Exception:
-                    log.exception("Gagal kembali ke halaman semula setelah read_chat")
-            return messages
-
-    def open_chat(self, url: str) -> list[dict]:
-        """Buka chat lama berdasarkan URL chat.qwen.ai/c/... dan JADIKAN chat
-        aktif: ask() berikutnya melanjutkan chat ini (tanpa New Chat)."""
-        if not url.startswith(config.BASE_URL + "/c/"):
-            raise ValueError("URL chat harus berasal dari chat.qwen.ai.")
-        with self._operation_lock:
-            if not self._is_logged_in():
-                raise AuthExpired("Sesi login Qwen kadaluarsa.")
-            page = self.page
-            page.goto(url, timeout=config.NAV_TIMEOUT_MS, wait_until="domcontentloaded")
-            page.wait_for_selector(
-                config.TEXTAREA_SEL, timeout=15_000, state="visible"
-            )
-            self.has_active_chat = True
-            try:
-                page.wait_for_selector(
-                    config.MSG_ITEM_SEL, timeout=10_000, state="attached"
-                )
-                messages = self._extract_messages(page)
-            except PWTimeoutError:
-                messages = []
-            return messages
 
     def apply_model(self, model_id: str) -> str:
         """Pilih model LLM via URL ?model= + reload.

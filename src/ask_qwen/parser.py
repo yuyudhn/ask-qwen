@@ -85,35 +85,3 @@ def extract_answer(main_text: str, user_message: str | None = None) -> str:
         text = "\n".join(lines[last_marker + 1 :])
 
     return _strip_noise_lines(text).strip()
-
-
-def clean_message(role: str, text: str) -> str:
-    """Bersihkan satu pesan (user atau assistant) mentah dari DOM.
-
-    Assistant: buang reasoning marker 'Thinking completed' (dropdown
-    collapsed: hanya label yang terbaca, isi summary tidak ikut) + disclaimer.
-    """
-    if role == "assistant":
-        text = _strip_comparison_ui(text)
-        text = text.replace("AI-generated content may not be accurate.", "")
-        lines = text.splitlines()
-        last_marker = max(
-            (i for i, ln in enumerate(lines) if ln.strip() == "Thinking completed"),
-            default=-1,
-        )
-        if last_marker != -1:
-            text = "\n".join(lines[last_marker + 1 :])
-    return _strip_noise_lines(text).strip()
-
-
-def parse_messages(pairs: list[tuple[str, str]]) -> list[dict]:
-    """Ubah [(role, raw_text), ...] jadi [{role, content}] yang sudah bersih.
-
-    Pesan yang kosong setelah dibersihkan dibuang.
-    """
-    messages = []
-    for role, raw in pairs:
-        content = clean_message(role, raw)
-        if content:
-            messages.append({"role": role, "content": content})
-    return messages

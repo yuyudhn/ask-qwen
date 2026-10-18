@@ -30,18 +30,7 @@ TEXTAREA_SEL = "textarea.message-input-textarea"
 SEND_BTN_SEL = 'button[aria-label="Send"]'
 MAIN_SEL = "main"
 NEW_CHAT_BTN_SEL = 'button:has-text("New Chat")'
-# Item chat di sidebar: <a> TANPA href (routing client-side SPA);
-# URL /c/<uuid> baru ada SETELAH item diklik. Jangan pakai a[href*="/c/"].
-CHAT_HISTORY_SEL = 'a[aria-label="chat-item"]'
-SEARCH_INPUT_SEL = 'input[placeholder="Search Chats"]'
 LOGIN_BTN_SEL = 'button:has-text("Log in")'
-
-# Pesan di dalam <main>: klasifikasi peran via class container
-MSG_ITEM_SEL = ".qwen-chat-message"
-MSG_USER_CLS = "qwen-chat-message-user"
-MSG_ASSISTANT_CLS = "qwen-chat-message-assistant"
-MSG_USER_BODY_SEL = ".chat-user-message"
-MSG_ASSISTANT_BODY_SEL = ".chat-response-message"
 
 # Reasoning marker yang muncul di atas jawaban (strip saat parsing/streaming)
 THINKING_MARKER = "Thinking completed"
@@ -77,7 +66,6 @@ MODES = ("auto", "thinking", "fast")
 
 # Guard boundaries before large values reach the browser or response.
 MAX_MESSAGE_CHARS = int(os.getenv("QWEN_MAX_MESSAGE_CHARS", "100000"))
-MAX_TRANSCRIPT_CHARS = int(os.getenv("QWEN_MAX_TRANSCRIPT_CHARS", "200000"))
 MAX_HISTORY_ITEMS = int(os.getenv("QWEN_MAX_HISTORY_ITEMS", "100"))
 
 # Daemon

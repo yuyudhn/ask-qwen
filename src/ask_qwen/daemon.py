@@ -12,15 +12,13 @@ import threading
 import time
 
 from . import config
-from .browser import AuthExpired, ProfileLocked, WAFChallenge, normalize_chat_ref
+from .browser import AuthExpired, ProfileLocked, WAFChallenge
 from .client import QwenWebClient
 
 log = logging.getLogger("ask_qwen.daemon")
 
 _METHODS = (
-    "ask", "read", "new_chat", "list_chats", "read_chat",
-    "open_chat", "set_mode", "set_model", "stop_generation", "get_status",
-    "search_chats", "ping",
+    "ask", "new_chat", "set_mode", "set_model", "stop_generation", "ping",
 )
 
 # Tipe error yang dilewatkan utuh lewat socket agar CLI bisa memetakan
@@ -115,7 +113,7 @@ class DaemonServer:
     def _warmup(self) -> None:
         """Pre-launch browser so first real request is fast."""
         try:
-            self._client.get_status()
+            self._client.warmup()
         except Exception:
             log.debug("warmup failed (will retry on first request)", exc_info=True)
 
@@ -285,32 +283,17 @@ class DaemonClient:
     def ask(self, message: str) -> str:
         return self._request("ask", message=message)
 
-    def read(self) -> list[dict]:
-        return self._request("read")
-
     def new_chat(self) -> str:
         return self._request("new_chat")
-
-    def list_chats(self, limit: int = 20) -> list[dict]:
-        return self._request("list_chats", limit=limit)
-
-    def read_chat(self, url: str) -> list[dict]:
-        return self._request("read_chat", url=normalize_chat_ref(url))
-
-    def open_chat(self, url: str) -> list[dict]:
-        return self._request("open_chat", url=normalize_chat_ref(url))
 
     def set_mode(self, mode: str) -> str:
         return self._request("set_mode", mode=mode)
 
+    def set_model(self, model_id: str) -> str:
+        return self._request("set_model", model_id=model_id)
+
     def stop_generation(self) -> str:
         return self._request("stop_generation")
-
-    def get_status(self) -> dict:
-        return self._request("get_status")
-
-    def search_chats(self, query: str) -> list[dict]:
-        return self._request("search_chats", query=query)
 
     def close(self) -> None:
         pass  # daemon stays alive

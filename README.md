@@ -151,7 +151,6 @@ The agent starts a new chat, asks Qwen for help, and reads the answer from stdou
 | `ASK_QWEN_IDLE_TIMEOUT` | `1800` | Daemon idle timeout in seconds. |
 | `ASK_QWEN_REQUEST_TIMEOUT` | `600` | Per-request daemon response timeout in seconds. |
 | `QWEN_MAX_MESSAGE_CHARS` | `100000` | Max input message length. |
-| `QWEN_MAX_TRANSCRIPT_CHARS` | `200000` | Max transcript length returned by `read`. |
 | `QWEN_MAX_HISTORY_ITEMS` | `100` | Max chat history items from `list`. |
 
 ## Limitations & Risks

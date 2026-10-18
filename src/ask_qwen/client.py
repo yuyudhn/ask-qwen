@@ -83,34 +83,6 @@ class QwenWebClient:
         self._record_active_chat()
         return result
 
-    def read(self) -> list[dict]:
-        return self._run(self._read_once)
-
-    @staticmethod
-    def _limit_transcript(messages: list[dict]) -> list[dict]:
-        remaining = config.MAX_TRANSCRIPT_CHARS
-        limited = []
-        for message in messages:
-            content = str(message.get("content", ""))
-            if len(content) > remaining:
-                limited.append({**message, "content": content[:remaining]})
-                limited.append({
-                    "role": "system",
-                    "content": "Transcript truncated at the configured response limit.",
-                })
-                break
-            limited.append(message)
-            remaining -= len(content)
-            if remaining <= 0:
-                break
-        return limited
-
-    def _read_once(self) -> list[dict]:
-        try:
-            return self._limit_transcript(self.backend.read())
-        except AuthExpired:
-            return [{"role": "error", "content": "Login Qwen kadaluarsa. Jalankan `ask-qwen login`."}]
-
     def new_chat(self) -> str:
         return self._run(self._new_chat_once)
 
@@ -131,37 +103,6 @@ class QwenWebClient:
                 api.set_active_chat(cid)
         except Exception:
             pass
-
-    def list_chats(self, limit: int = 20) -> list[dict]:
-        if not isinstance(limit, int) or limit < 1:
-            raise ValueError("limit must be a positive integer")
-        return self._run(self._list_chats_once, min(limit, config.MAX_HISTORY_ITEMS))
-
-    def _list_chats_once(self, limit: int) -> list[dict]:
-        try:
-            return self.backend.list_chats(limit)
-        except AuthExpired:
-            return [{"role": "error", "content": "Login Qwen kadaluarsa. Jalankan `ask-qwen login`."}]
-
-    def read_chat(self, url: str) -> list[dict]:
-        return self._run(self._read_chat_once, url)
-
-    def _read_chat_once(self, url: str) -> list[dict]:
-        try:
-            return self.backend.read_chat(url)
-        except AuthExpired:
-            return [{"role": "error", "content": "Login Qwen kadaluarsa. Jalankan `ask-qwen login`."}]
-
-    def open_chat(self, url: str) -> list[dict]:
-        return self._run(self._open_chat_once, url)
-
-    def _open_chat_once(self, url: str) -> list[dict]:
-        try:
-            messages = self.backend.open_chat(url)
-        except AuthExpired:
-            return [{"role": "error", "content": "Login Qwen kadaluarsa. Jalankan `ask-qwen login`."}]
-        self.chat_active = True
-        return messages
 
     def set_mode(self, mode: str) -> str:
         """Validasi + persist mode; daemon menerapkannya ke store browser."""
@@ -201,10 +142,10 @@ class QwenWebClient:
         self.backend.request_stop()
         return "Stop request diterima."
 
-    def get_status(self) -> dict:
-        return self._run(self.backend.get_status)
+    def warmup(self) -> None:
+        """Pre-launch browser (via executor, thread yang sama dengan semua
+        operasi browser) agar request pertama tidak cold-start."""
+        self._run(self._ensure_context)
 
-    def search_chats(self, query: str) -> list[dict]:
-        if not isinstance(query, str) or not query.strip():
-            raise ValueError("query must not be empty")
-        return self._run(self.backend.search_chats, query)
+    def _ensure_context(self) -> None:
+        self.backend._ensure_context()

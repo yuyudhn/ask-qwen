@@ -47,27 +47,8 @@ class FakeBackend:
 
         return types.SimpleNamespace(url="https://chat.qwen.ai/c/fake-1")
 
-    def read(self) -> list[dict]:
-        self.calls.append("read")
-        if self.fail_auth_times > 0:
-            raise AuthExpired("expired")
-        return [{"role": "transcript", "content": "chat isi"}]
 
-    def list_chats(self, limit: int) -> list[dict]:
-        self.calls.append(f"list_chats:{limit}")
-        return [{"title": "chat", "url": "https://chat.qwen.ai/c/1"}]
 
-    def read_chat(self, url: str) -> list[dict]:
-        self.calls.append(f"read_chat:{url}")
-        return [{"role": "user", "content": "chat isi"}]
-
-    def open_chat(self, url: str) -> list[dict]:
-        self.calls.append(f"open_chat:{url}")
-        if self.fail_auth_times > 0:
-            self.fail_auth_times -= 1
-            raise AuthExpired("expired")
-        self.active = True
-        return [{"role": "user", "content": "chat lama"}]
 
     def set_mode(self, mode: str) -> str:
         self.calls.append(f"set_mode:{mode}")
@@ -90,13 +71,7 @@ class FakeBackend:
     def request_stop(self) -> None:
         self.stop_flags += 1
 
-    def get_status(self) -> dict:
-        self.calls.append("get_status")
-        return {"logged_in": True, "generating": False}
 
-    def search_chats(self, query: str) -> list[dict]:
-        self.calls.append(f"search_chats:{query}")
-        return [{"title": query, "url": "https://chat.qwen.ai/c/1"}]
 
     def close(self) -> None:
         self.calls.append("close")
@@ -160,12 +135,6 @@ class TestClientState:
         result = c.ask("halo")
         assert "ask-qwen login" in result
 
-    def test_read_error_returns_hint(self):
-        b = FakeBackend(fail_auth_times=5)
-        c = QwenWebClient(backend=b)
-        result = c.read()
-        assert result[0]["role"] == "error"
-        assert "ask-qwen login" in result[0]["content"]
 
     def test_ask_rejects_oversized_message_before_browser_call(self, monkeypatch):
         b = FakeBackend()
@@ -180,33 +149,8 @@ class TestClientState:
             assert False, "oversized message was accepted"
         assert b.calls == []
 
-    def test_list_chats_clamps_limit(self, monkeypatch):
-        b = FakeBackend()
-        c = QwenWebClient(backend=b)
-        monkeypatch.setattr("ask_qwen.config.MAX_HISTORY_ITEMS", 2)
 
-        assert c.list_chats(99) == [{"title": "chat", "url": "https://chat.qwen.ai/c/1"}]
-        assert b.calls == ["list_chats:2"]
 
-    def test_open_chat_then_ask_continues_same_chat(self):
-        b = FakeBackend()
-        c = QwenWebClient(backend=b)
-        url = "https://chat.qwen.ai/c/abc"
-
-        messages = c.open_chat(url)
-        result = c.ask("lanjut")
-
-        assert messages == [{"role": "user", "content": "chat lama"}]
-        assert result == "answer:lanjut"
-        # tidak ada new_chat: ask melanjutkan chat yang dibuka
-        assert b.calls == ["open_chat:https://chat.qwen.ai/c/abc", "ask:lanjut"]
-
-    def test_open_chat_error_returns_hint(self):
-        b = FakeBackend(fail_auth_times=5)
-        c = QwenWebClient(backend=b)
-        result = c.open_chat("https://chat.qwen.ai/c/abc")
-        assert result[0]["role"] == "error"
-        assert "ask-qwen login" in result[0]["content"]
 
     def test_set_mode_persists_and_applies(self, monkeypatch):
         from ask_qwen import api
@@ -257,19 +201,4 @@ class TestClientState:
         assert b.stop_flags == 1  # langsung, tanpa lewat executor/browser thread
         assert b.calls == []
 
-    def test_get_status_delegates_to_backend(self):
-        b = FakeBackend()
-        c = QwenWebClient(backend=b)
 
-        assert c.get_status()["logged_in"] is True
-        assert b.calls == ["get_status"]
-
-    def test_search_chats_rejects_empty_query(self):
-        c = QwenWebClient(backend=FakeBackend())
-
-        try:
-            c.search_chats(" ")
-        except ValueError as error:
-            assert "query" in str(error)
-        else:
-            assert False, "empty query was accepted"
