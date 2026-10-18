@@ -58,7 +58,7 @@ class _Spinner:
 
 def cmd_ask(args) -> None:
     message = " ".join(args.message)
-    if sys.stdout.isatty():
+    if sys.stdout.isatty() and not args.json:
         # TTY: jawaban mengalir langsung ke stdout; --verbose menampilkan
         # fase think/code_interpreter ke stderr. Piped: tetap satu jawaban
         # bersih di akhir agar aman untuk konsumsi agen.
@@ -96,8 +96,6 @@ def cmd_ask(args) -> None:
             _stop_spinner()
         if not first["answer"]:  # sudah streaming — cukup newline penutup
             print()
-        elif args.json:
-            _print_json(result)
         else:
             print(result["answer"])
     else:
