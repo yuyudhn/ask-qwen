@@ -18,7 +18,7 @@ from .client import QwenWebClient
 log = logging.getLogger("ask_qwen.daemon")
 
 _METHODS = (
-    "ask", "new_chat", "set_mode", "set_model", "stop_generation", "ping",
+    "ask", "set_mode", "set_model", "stop_generation", "ping",
 )
 
 # Tipe error yang dilewatkan utuh lewat socket agar CLI bisa memetakan
@@ -282,9 +282,6 @@ class DaemonClient:
 
     def ask(self, message: str) -> str:
         return self._request("ask", message=message)
-
-    def new_chat(self) -> str:
-        return self._request("new_chat")
 
     def set_mode(self, mode: str) -> str:
         return self._request("set_mode", mode=mode)

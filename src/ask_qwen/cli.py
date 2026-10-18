@@ -286,7 +286,7 @@ def cmd_interactive(args) -> None:
         if line.lower() == "exit":
             break
         if line == "/new":
-            print(_run(client.new_chat))
+            cmd_new_chat(None)  # marker null: UI membuat chat saat ask berikutnya
             continue
         if line == "/read":
             try:

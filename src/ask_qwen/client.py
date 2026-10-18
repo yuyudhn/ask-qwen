@@ -83,15 +83,6 @@ class QwenWebClient:
         self._record_active_chat()
         return result
 
-    def new_chat(self) -> str:
-        return self._run(self._new_chat_once)
-
-    def _new_chat_once(self) -> str:
-        result = self.backend.new_chat()
-        self.chat_active = True
-        self._record_active_chat()
-        return result
-
     def _record_active_chat(self) -> None:
         """Simpan chat id aktif (dari URL browser) ke state.json untuk API CLI."""
         try:

@@ -31,12 +31,6 @@ class FakeClient:
         yield "answer\n"
 
 
-    def new_chat(self):
-        self.calls.append(("new_chat",))
-        self._maybe_raise()
-        return "Chat baru siap."
-
-
 
     def set_mode(self, mode):
         self.calls.append(("set_mode", mode))

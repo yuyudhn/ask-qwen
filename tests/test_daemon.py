@@ -26,8 +26,6 @@ class FakeQwenClient:
     def read(self):
         return [{"role": "assistant", "content": "hi"}]
 
-    def new_chat(self):
-        return "Chat baru siap."
 
     def list_chats(self, limit=20):
         return [{"title": "t", "url": "u"}]

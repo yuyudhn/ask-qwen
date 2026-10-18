@@ -91,12 +91,6 @@ class TestClientState:
         c.ask("dua")
         assert b.calls == ["new_chat", "ask:satu", "ask:dua"]
 
-    def test_new_chat_resets_state(self):
-        b = FakeBackend()
-        c = QwenWebClient(backend=b)
-        c.new_chat()
-        c.ask("halo")
-        assert b.calls == ["new_chat", "ask:halo"]  # tidak ada new_chat ganda
 
     def test_ask_opens_chat_from_state(self, monkeypatch):
         monkeypatch.setattr("ask_qwen.api.load_state", lambda: {"active_chat_id": "cid-9"})
