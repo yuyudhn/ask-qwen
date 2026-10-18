@@ -43,11 +43,15 @@ MSG_ASSISTANT_CLS = "qwen-chat-message-assistant"
 MSG_USER_BODY_SEL = ".chat-user-message"
 MSG_ASSISTANT_BODY_SEL = ".chat-response-message"
 
-# Reasoning marker yang muncul di atas jawaban (strip saat parsing)
+# Reasoning marker yang muncul di atas jawaban (strip saat parsing/streaming)
 THINKING_MARKER = "Thinking completed"
 STRIP_LINES = (
     THINKING_MARKER,
+    # Label mode di area input ikut ter-render sebagai baris di <main> saat
+    # streaming (verified fe 0.3.19) — strip SEMUA varian, bukan hanya "Auto".
     "Auto",
+    "Thinking",
+    "Fast",
     "AI-generated content may not be accurate.",
     # noise dari A/B comparison UI (parser._FEEDBACK_NOISE)
     "This feedback will help us evaluate and improve Qwen's performance.",
