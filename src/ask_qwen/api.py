@@ -6,6 +6,7 @@ lewat ~/.ask-qwen/state.json.
 """
 
 import json
+import re
 import urllib.error
 import urllib.request
 import uuid
@@ -15,6 +16,16 @@ from . import auth, config
 
 class ApiError(Exception):
     """Panggilan API gagal (jaringan, auth, atau envelope success=false)."""
+
+
+def parse_chat_id(ref: str) -> str:
+    """Terima URL chat (.../c/<id>) atau chat id polos, kembalikan id."""
+    ref = (ref or "").strip()
+    if "/c/" in ref:
+        ref = ref.split("/c/", 1)[1].split("/")[0].split("?")[0]
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,}", ref or ""):
+        raise ApiError(f"bukan chat id/URL yang valid: {ref!r}")
+    return ref
 
 
 def _request(method: str, path: str, payload: dict | None = None) -> dict:
@@ -138,21 +149,36 @@ def chat_transcript(chat_id: str) -> list[dict]:
     """
     data = _request("GET", f"/api/v2/chats/{chat_id}")
     history = (data.get("chat") or {}).get("history") or {}
-    if not history:
-        return []
-    by_parent = {mid: n for mid, n in history.items()}
-    roots = [n for n in history.values() if not n.get("parentId")]
+    # Bentuk nyata: {"messages": {id: node}, "currentId": ..., ...}
+    nodes = history.get("messages") if isinstance(history, dict) else None
+    if not isinstance(nodes, dict):
+        nodes = {}
+    roots = [n for n in nodes.values() if isinstance(n, dict) and not n.get("parentId")]
     roots.sort(key=lambda n: n.get("timestamp") or 0)
     messages = []
     for root in roots:
         node = root
-        while node:
+        while isinstance(node, dict):
             role = node.get("role")
-            text = _segment_text(node.get("content"))
+            # Teks asisten ada di content_list (phase segments); field content
+            # biasanya kosong. Thinking phase sengaja dilewati — sama dengan
+            # perilaku parser DOM yang menyembunyikan reasoning.
+            content_list = node.get("content_list")
+            if isinstance(content_list, list) and content_list:
+                text = "\n".join(
+                    str(s.get("content") or "")
+                    for s in content_list
+                    if isinstance(s, dict) and s.get("phase") == "answer"
+                )
+            else:
+                text = _segment_text(node.get("content"))
             if role in ("user", "assistant") and text.strip():
                 messages.append({"role": role, "content": text})
-            children = [c for c in (node.get("childrenIds") or []) if c in by_parent]
-            node = by_parent[children[0]] if children else None
+            children = [c for c in (node.get("childrenIds") or []) if c in nodes]
+            nxt = nodes.get(children[0]) if children else None
+            if nxt is node:  # siklus data rusak — berhenti
+                break
+            node = nxt
     return messages
 
 

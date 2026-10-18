@@ -106,7 +106,16 @@ def cmd_ask(args) -> None:
 
 
 def cmd_read(args) -> None:
-    result = _run(_get_client().read)
+    from . import api
+
+    chat_id = api.load_state().get("active_chat_id")
+    if not chat_id:
+        print(
+            "Error: tidak ada chat aktif. Gunakan `ask-qwen ask` atau `ask-qwen open` dulu.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    result = _run(api.chat_transcript, chat_id)
     _print_json(result)
 
 
@@ -123,7 +132,10 @@ def cmd_list_chats(args) -> None:
 
 
 def cmd_read_chat(args) -> None:
-    result = _run(_get_client().read_chat, args.url)
+    from . import api
+
+    chat_id = _run(api.parse_chat_id, args.url)
+    result = _run(api.chat_transcript, chat_id)
     _print_json(result)
 
 

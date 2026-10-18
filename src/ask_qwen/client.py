@@ -61,7 +61,17 @@ class QwenWebClient:
         if not self.chat_active:
             self.backend.new_chat()
             self.chat_active = True
-        return self.backend.ask(message, on_delta)
+        result = self.backend.ask(message, on_delta)
+        # catat chat aktif agar perintah CLI lain (read via API) tahu chat id
+        try:
+            url = self.backend.page.url
+            if "/c/" in url:
+                from . import api
+
+                api.set_active_chat(url.rsplit("/c/", 1)[-1])
+        except Exception:
+            pass
+        return result
 
     def read(self) -> list[dict]:
         return self._run(self._read_once)
