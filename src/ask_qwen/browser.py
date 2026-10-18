@@ -2,6 +2,8 @@
 
 import json
 import logging
+import os
+import re
 import threading
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
@@ -9,6 +11,45 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeoutError
 from . import config
 
 log = logging.getLogger(__name__)
+
+_CHAT_ID_RE = re.compile(r"[A-Za-z0-9_-]{6,}")
+
+
+def normalize_chat_ref(ref: str) -> str:
+    """Terima URL chat penuh atau chat ID polos (dari `list`), kembalikan URL."""
+    ref = (ref or "").strip()
+    if ref.startswith(config.BASE_URL + "/c/"):
+        return ref
+    if _CHAT_ID_RE.fullmatch(ref):
+        return f"{config.BASE_URL}/c/{ref}"
+    raise ValueError(
+        f"Referensi chat tidak valid: {ref!r}. Pakai URL "
+        f"{config.BASE_URL}/c/... atau chat ID dari `ask-qwen list`."
+    )
+
+
+def _raise_if_generating(page) -> None:
+    """list/search mengklik-klik sidebar dan membunuh stream yang sedang jalan."""
+    try:
+        generating = page.locator(config.STOP_BTN_SEL).is_visible()
+    except Exception:
+        return  # status generasi tidak terbaca — jangan blokir
+    if generating:
+        raise RuntimeError(
+            "Generasi sedang berjalan; perintah ini akan mengganggu stream. "
+            "Tunggu selesai atau jalankan `ask-qwen stop`."
+        )
+
+
+def _load_auth() -> dict | None:
+    """Lazy import agar modul auth (urllib) tidak dipakai di test DOM murni."""
+    try:
+        from .auth import load_auth
+
+        return load_auth()
+    except Exception:
+        log.exception("Gagal baca auth.json")
+        return None
 
 
 def _playwright_cookies(raw: object) -> list[dict]:
@@ -78,6 +119,26 @@ class PlaywrightBackend:
                     log.info("Seeded %d cookies dari cookies.json", len(cookies))
                 except Exception:
                     log.exception("Gagal seed cookies (lanjut dengan profile saja)")
+            auth = _load_auth()
+            if auth and auth.get("refresh_token"):
+                # Seed TERAKHIR agar menang atas refresh_token usang di cookies.json.
+                # Sesi web dibangun dari cookie ini oleh app boot (GET auths/refresh);
+                # lihat dev-notes/qwen-api-research.md bagian "Web session model".
+                self._ctx.add_cookies([{
+                    "name": "refresh_token",
+                    "value": auth["refresh_token"],
+                    "domain": ".qwen.ai",
+                    "path": "/",
+                    "httpOnly": True,
+                    "secure": True,
+                    "sameSite": "Lax",
+                }])
+                log.info("Seeded refresh_token cookie dari auth.json")
+            # Marker logout lokal membuat app skip boot refresh walau cookie valid;
+            # hapus sebelum script app jalan. dev-notes: "Web session model".
+            self._ctx.add_init_script(
+                "try { localStorage.removeItem('qwen_token_logged_out_marker'); } catch (e) {}"
+            )
         except Exception:
             self._close()
             raise
@@ -185,7 +246,7 @@ class PlaywrightBackend:
 
     # -- tools -------------------------------------------------------------
 
-    def ask(self, message: str) -> str:
+    def ask(self, message: str, on_delta=None) -> str:
         from .parser import extract_answer
 
         with self._operation_lock:
@@ -202,16 +263,18 @@ class PlaywrightBackend:
             previous_text = page.locator(config.MAIN_SEL).inner_text()
             page.click(config.SEND_BTN_SEL)
 
-            answer = self._wait_response_done(page, previous_text=previous_text)
+            answer = self._wait_response_done(page, previous_text=previous_text, on_delta=on_delta)
             raw = page.locator(config.MAIN_SEL).inner_text()
             self.has_active_chat = True
             return extract_answer(raw, user_message=message) or answer
 
-    def _wait_response_done(self, page, previous_text: str = "") -> str:
+    def _wait_response_done(self, page, previous_text: str = "", on_delta=None) -> str:
         """Tunggu stream selesai via sinyal tombol Stop (terverifikasi dari
         DOM Qwen): Stop muncul saat generasi, hilang saat selesai.
 
         Fallback bila selector Stop berubah: teks stabil + masa tenggang.
+        on_delta: callback(chunk) dipanggil dengan baris-baris jawaban baru
+        (bersih dari noise UI) saat generasi berjalan — untuk streaming CLI.
         """
         import time
 
@@ -222,48 +285,82 @@ class PlaywrightBackend:
         start_deadline = sent_at + config.RESPONSE_START_TIMEOUT_MS / 1000
         stop_ever_seen = False
         last_text, stable_since = "", None
+        # state streaming: kirim hanya suffix baru; pecahan baris di-buffer
+        buf, streamed = "", previous_text
 
-        while time.monotonic() < deadline:
-            now = time.monotonic()
-            try:
-                stop_visible = stop.is_visible()
-            except Exception:
-                stop_visible = False
-            if stop_visible:
-                stop_ever_seen = True
-            try:
-                current = main.inner_text()
-            except Exception:
-                current = last_text
+        def emit(current: str) -> None:
+            nonlocal buf, streamed
+            if not on_delta or current == streamed:
+                return
+            if current.startswith(streamed):
+                buf += current[len(streamed) :]
+            else:
+                # re-render React mengganti teks di tengah (bukan append):
+                # buang pecahan baris yang belum terkirim (sudah tertulis ulang
+                # di DOM), lanjutkan dari suffix setelah prefix bersama.
+                # shortcut: streaming best-effort, jawaban final tetap dari
+                # extract_answer/read yang membaca ulang DOM utuh.
+                prefix = os.path.commonprefix([streamed, current])
+                buf = current[len(prefix) :]
+            streamed = current
+            lines = buf.split("\n")
+            buf = lines.pop()
+            for line in lines:
+                stripped = line.strip()
+                if stripped and stripped not in config.STRIP_LINES:
+                    on_delta(line + "\n")
 
-            if stop_ever_seen and not stop_visible:
-                return current  # generasi selesai
+        def flush() -> None:
+            nonlocal buf
+            if on_delta and buf.strip() and buf.strip() not in config.STRIP_LINES:
+                on_delta(buf)
+            buf = ""
 
-            if current != last_text:
-                last_text, stable_since = current, now
-            elif (
-                current
-                and current != previous_text
-                and stable_since
-                and (now - stable_since) * 1000 >= config.RESPONSE_STABLE_MS
-                and not stop_visible
-                and (not stop_ever_seen and now - sent_at >= config.RESPONSE_FALLBACK_GRACE_S)
-            ):
-                # ponytail: fallback teks-stabil; risiko salah-deteksi hanya
-                # bila Stop tertunda > masa tenggang, upgrade ke SSE bila perlu
-                return current
+        try:
+            while time.monotonic() < deadline:
+                now = time.monotonic()
+                try:
+                    stop_visible = stop.is_visible()
+                except Exception:
+                    stop_visible = False
+                if stop_visible:
+                    stop_ever_seen = True
+                try:
+                    current = main.inner_text()
+                except Exception:
+                    current = last_text
+                emit(current)
 
-            if (
-                not stop_ever_seen
-                and now >= start_deadline
-                and current == previous_text
-            ):
-                raise PWTimeoutError(
-                    "Respons Qwen tidak dimulai (pesan mungkin gagal terkirim)."
-                )
-            time.sleep(config.POLL_INTERVAL_S)
+                if stop_ever_seen and not stop_visible:
+                    return current  # generasi selesai
 
-        raise PWTimeoutError("Respons Qwen tidak selesai dalam batas waktu.")
+                if current != last_text:
+                    last_text, stable_since = current, now
+                elif (
+                    current
+                    and current != previous_text
+                    and stable_since
+                    and (now - stable_since) * 1000 >= config.RESPONSE_STABLE_MS
+                    and not stop_visible
+                    and (not stop_ever_seen and now - sent_at >= config.RESPONSE_FALLBACK_GRACE_S)
+                ):
+                    # ponytail: fallback teks-stabil; risiko salah-deteksi hanya
+                    # bila Stop tertunda > masa tenggang, upgrade ke SSE bila perlu
+                    return current
+
+                if (
+                    not stop_ever_seen
+                    and now >= start_deadline
+                    and current == previous_text
+                ):
+                    raise PWTimeoutError(
+                        "Respons Qwen tidak dimulai (pesan mungkin gagal terkirim)."
+                    )
+                time.sleep(config.POLL_INTERVAL_S)
+
+            raise PWTimeoutError("Respons Qwen tidak selesai dalam batas waktu.")
+        finally:
+            flush()
 
     def _new_chat_in_page(self, page) -> None:
         try:
@@ -294,7 +391,15 @@ class PlaywrightBackend:
 
     def get_status(self) -> dict:
         with self._operation_lock:
-            logged_in = self._is_logged_in()
+            # Login status via probe API (Bearer), bukan heuristic DOM —
+            # Qwen sering mengubah struktur halaman (lihat dev-notes).
+            try:
+                from .auth import session_ok
+
+                logged_in = session_ok()
+            except Exception:
+                log.exception("session_ok gagal")
+                logged_in = False
             page = self.page
             try:
                 generating = page.locator(config.STOP_BTN_SEL).is_visible()
@@ -331,6 +436,7 @@ class PlaywrightBackend:
             if not self._is_logged_in():
                 raise AuthExpired("Sesi login Qwen kadaluarsa.")
             page = self.page
+            _raise_if_generating(page)
             try:
                 # daftar chat termuat lazily setelah chatbox — tunggu sebentar
                 page.wait_for_selector(
@@ -369,7 +475,7 @@ class PlaywrightBackend:
                 url = page.url
                 if "/c/" in url and url not in seen_urls:
                     seen_urls.add(url)
-                    chats.append({"title": title, "url": url})
+                    chats.append({"title": title, "url": url, "id": url.rsplit("/c/", 1)[-1]})
             # kembalikan halaman semula
             if page.url != original_url and "chat.qwen.ai" in original_url:
                 try:
@@ -484,40 +590,3 @@ class PlaywrightBackend:
                 f"Mode '{mode}' tidak ditemukan di dropdown Qwen "
                 f"(opsi berubah? lihat config.MODE_*)."
             )
-
-    # -- login flow --------------------------------------------------------
-
-    def ensure_login_headed(self) -> bool:
-        """Relaunch headed, tunggu user login manual, lalu kembali headless.
-
-        Cookie otomatis tersimpan di persistent profile saat login.
-        """
-        with self._operation_lock:
-            print("Membuka browser untuk login manual ke chat.qwen.ai ...")
-            print("Selesaikan login di jendela yang terbuka (maks 5 menit).")
-            self._launch(headless=False)
-            try:
-                self.page.goto(config.BASE_URL, timeout=config.NAV_TIMEOUT_MS)
-            except PWTimeoutError:
-                pass
-
-            import time
-
-            deadline = time.monotonic() + config.LOGIN_TIMEOUT_S
-            while time.monotonic() < deadline:
-                try:
-                    self.page.wait_for_selector(
-                        config.TEXTAREA_SEL, timeout=config.LOGIN_POLL_S * 1000
-                    )
-                    # Textarea visible even when logged out; wait until login button gone
-                    login_btn = self.page.locator(config.LOGIN_BTN_SEL)
-                    if login_btn.count() > 0 and login_btn.first.is_visible():
-                        continue
-                    print("Login berhasil.")
-                    self._launch(headless=True)  # kembali headless dengan cookie baru
-                    return True
-                except PWTimeoutError:
-                    continue
-            print("Timeout login. Coba lagi dengan `ask-qwen login`.")
-            self._launch(headless=True)
-            return False

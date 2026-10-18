@@ -1,16 +1,18 @@
-"""CLI: buka browser headed untuk login manual (pertama kali / re-login)."""
+"""Login via Qwen auth API (tanpa browser; lihat dev-notes/qwen-api-research.md)."""
 
 import argparse
+import getpass
 
-from .browser import PlaywrightBackend
+from .auth import AuthError, signin
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Login manual ke Qwen Web")
-    parser.parse_args()
-    backend = PlaywrightBackend()
+    parser = argparse.ArgumentParser(description="Sign in ke Qwen via API")
+    parser.add_argument("--email", help="Qwen account email")
+    args = parser.parse_args()
+    email = args.email or input("Qwen email: ").strip()
     try:
-        ok = backend.ensure_login_headed()
-        raise SystemExit(0 if ok else 1)
-    finally:
-        backend.close()
+        auth = signin(email, getpass.getpass("Password: "))
+    except AuthError as e:
+        raise SystemExit(f"Login gagal: {e}")
+    print(f"Login OK: {auth['name']} <{auth['email']}>")

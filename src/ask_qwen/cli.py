@@ -33,6 +33,7 @@ class _Spinner:
     def __init__(self, message: str = "Thinking") -> None:
         self._message = message
         self._stop = threading.Event()
+        self._stopped = False
         self._thread: threading.Thread | None = None
 
     def __enter__(self):
@@ -42,6 +43,9 @@ class _Spinner:
         return self
 
     def __exit__(self, *_):
+        if self._stopped:
+            return  # idempotent: jalur streaming boleh exit dua kali
+        self._stopped = True
         self._stop.set()
         if self._thread:
             self._thread.join()
@@ -59,11 +63,46 @@ class _Spinner:
             i += 1
 
 
+def _ask_streaming(client, message: str) -> None:
+    """Cetak jawaban per baris saat digenerasi; spinner sampai token pertama.
+    Bila tak ada delta (daemon lama/stream kosong), tampilkan jawaban final."""
+    spinner = _Spinner()
+    spinner.__enter__()
+    printed = False
+    try:
+        stream = client.ask_stream(message)
+        while True:
+            try:
+                delta = next(stream)
+            except StopIteration as stop:
+                if not printed and stop.value:
+                    spinner.__exit__()
+                    print(stop.value)
+                break
+            spinner.__exit__()
+            printed = True
+            print(delta, end="", flush=True)
+        if printed:
+            print()
+    finally:
+        spinner.__exit__()
+
+
 def cmd_ask(args) -> None:
     message = " ".join(args.message)
-    with _Spinner():
-        result = _run(_get_client().ask, message)
-    print(result)
+    client = _get_client()
+    if sys.stdout.isatty():
+        # TTY: stream jawaban per baris saat digenerasi; stdout untuk piped
+        # tetap satu jawaban bersih di akhir.
+        try:
+            _ask_streaming(client, message)
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(1)
+    else:
+        with _Spinner():
+            result = _run(client.ask, message)
+        print(result)
 
 
 def cmd_read(args) -> None:
@@ -112,20 +151,25 @@ def cmd_search(args) -> None:
 
 
 def cmd_login(args) -> None:
+    import getpass
+
     # Stop daemon first — it holds the browser profile
     if daemon.is_running():
         print("Stopping daemon...", file=sys.stderr)
         daemon.send_quit()
         time.sleep(1)
 
-    from .browser import PlaywrightBackend
+    from .auth import AuthError, signin
 
-    backend = PlaywrightBackend()
+    email = args.email or input("Qwen email: ").strip()
+    password = getpass.getpass("Password: ")
     try:
-        ok = backend.ensure_login_headed()
-        raise SystemExit(0 if ok else 1)
-    finally:
-        backend.close()
+        auth = signin(email, password)
+    except AuthError as e:
+        print(f"Login gagal: {e}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"Login OK: {auth['name']} <{auth['email']}>")
+    print("Browser daemon akan memakai sesi ini otomatis (refresh cookie di-seed).")
 
 
 def cmd_quit(args) -> None:
@@ -163,9 +207,10 @@ def cmd_interactive(args) -> None:
         if line.startswith("/mode "):
             print(_run(client.set_mode, line[6:].strip()))
             continue
-        with _Spinner():
-            result = _run(client.ask, line)
-        print(result)
+        try:
+            _ask_streaming(client, line)
+        except Exception as e:
+            print(f"Error: {e}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -189,12 +234,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-n", "--limit", type=int, default=20, help="Max chats to list")
     p.set_defaults(func=cmd_list_chats)
 
-    p = sub.add_parser("read-chat", help="Read a chat transcript by URL")
-    p.add_argument("url", help="chat.qwen.ai/c/... URL")
+    p = sub.add_parser("read-chat", help="Read a chat transcript by URL or chat ID")
+    p.add_argument("url", help="chat.qwen.ai/c/... URL atau chat ID dari `list`")
     p.set_defaults(func=cmd_read_chat)
 
     p = sub.add_parser("open", help="Open an old chat and make it active")
-    p.add_argument("url", help="chat.qwen.ai/c/... URL")
+    p.add_argument("url", help="chat.qwen.ai/c/... URL atau chat ID dari `list`")
     p.set_defaults(func=cmd_open_chat)
 
     p = sub.add_parser("mode", help="Set Qwen mode: auto, thinking, fast")
@@ -211,7 +256,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("query", help="Search query")
     p.set_defaults(func=cmd_search)
 
-    p = sub.add_parser("login", help="Open browser for manual login")
+    p = sub.add_parser("login", help="Sign in via Qwen API (no browser)")
+    p.add_argument("--email", help="Qwen account email (prompted if omitted)")
     p.set_defaults(func=cmd_login)
 
     p = sub.add_parser("chat", help="Interactive chat REPL")

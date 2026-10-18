@@ -9,8 +9,10 @@ class FakeBackend:
         self.calls: list[str] = []
         self.active = False
 
-    def ask(self, message: str) -> str:
+    def ask(self, message: str, on_delta=None) -> str:
         self.calls.append(f"ask:{message}")
+        if on_delta:
+            on_delta("streamed\n")
         if self.fail_auth_times > 0:
             self.fail_auth_times -= 1
             raise AuthExpired("expired")
@@ -60,9 +62,8 @@ class FakeBackend:
         self.calls.append(f"search_chats:{query}")
         return [{"title": query, "url": "https://chat.qwen.ai/c/1"}]
 
-    def ensure_login_headed(self) -> bool:
-        self.calls.append("login")
-        return self.login_ok
+    def close(self) -> None:
+        self.calls.append("close")
 
 
 class TestClientState:
@@ -86,16 +87,23 @@ class TestClientState:
         c.ask("halo")
         assert b.calls == ["new_chat", "ask:halo"]  # tidak ada new_chat ganda
 
-    def test_auth_expired_retries_after_login(self):
+    def test_auth_expired_retries_after_refresh(self, monkeypatch):
+        monkeypatch.setattr("ask_qwen.auth.refresh", lambda: {"access_token": "x"})
         b = FakeBackend(fail_auth_times=1)
         c = QwenWebClient(backend=b)
         result = c.ask("halo")
         assert result == "answer:halo"
-        assert b.calls == ["new_chat", "ask:halo", "login", "new_chat", "ask:halo"]
+        # refresh via API, browser relaunch (close), lalu ask ulang dari chat baru
+        assert b.calls == ["new_chat", "ask:halo", "close", "new_chat", "ask:halo"]
 
-    def test_auth_expired_login_fails_returns_hint(self):
+    def test_auth_expired_refresh_fails_returns_hint(self, monkeypatch):
+        from ask_qwen.auth import AuthError
+
+        def _fail():
+            raise AuthError("refresh token hilang")
+
+        monkeypatch.setattr("ask_qwen.auth.refresh", _fail)
         b = FakeBackend(fail_auth_times=5)
-        b.login_ok = False
         c = QwenWebClient(backend=b)
         result = c.ask("halo")
         assert "ask-qwen login" in result

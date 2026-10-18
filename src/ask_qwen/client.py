@@ -24,33 +24,44 @@ class QwenWebClient:
         finally:
             self._browser_executor.shutdown(wait=True, cancel_futures=True)
 
-    def ask(self, message: str) -> str:
+    def ask(self, message: str, on_delta=None) -> str:
         if not isinstance(message, str) or not message.strip():
             raise ValueError("message must not be empty")
         if len(message) > config.MAX_MESSAGE_CHARS:
             raise ValueError(
                 f"message exceeds maximum length of {config.MAX_MESSAGE_CHARS} characters"
             )
-        return self._run(self._ask_with_auth, message)
+        return self._run(self._ask_with_auth, message, on_delta)
 
-    def _ask_with_auth(self, message: str) -> str:
+    def _ask_with_auth(self, message: str, on_delta=None) -> str:
         try:
-            return self._ask_once(message)
+            return self._ask_once(message, on_delta)
         except AuthExpired:
-            # relaunch login memuat ulang halaman → state chat di browser hilang
+            # Sesi web kadaluarsa → refresh token via API, relaunch browser
+            # (refresh cookie di-seed ulang di _launch), lalu coba sekali lagi.
             self.chat_active = False
-            if self.backend.ensure_login_headed():
-                return self._ask_once(message)
+            if self._refresh_and_relaunch():
+                return self._ask_once(message, on_delta)
             return (
-                "Login Qwen kadaluarsa dan login manual gagal/belum selesai. "
+                "Login Qwen kadaluarsa dan refresh otomatis gagal. "
                 "Jalankan `ask-qwen login` lalu ulangi."
             )
 
-    def _ask_once(self, message: str) -> str:
+    def _refresh_and_relaunch(self) -> bool:
+        try:
+            from .auth import refresh
+
+            refresh()
+        except Exception:
+            return False
+        self.backend.close()  # _ensure_context akan relaunch dengan cookie baru
+        return True
+
+    def _ask_once(self, message: str, on_delta=None) -> str:
         if not self.chat_active:
             self.backend.new_chat()
             self.chat_active = True
-        return self.backend.ask(message)
+        return self.backend.ask(message, on_delta)
 
     def read(self) -> list[dict]:
         return self._run(self._read_once)

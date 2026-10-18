@@ -8,3 +8,4 @@ dist/
 .pytest_cache/
 *.log
 .playwright-mcp/
+dev-notes/
