@@ -2,22 +2,22 @@
 
 ## Project
 
-`ask-qwen` is a Python CLI tool for chatting with Qwen Web (`chat.qwen.ai`)
-via Playwright browser automation. No API key required — it drives a real
-headless Chromium browser. A background daemon keeps the browser warm between
-CLI invocations for fast response times.
+`ask-qwen` is a Python CLI tool for chatting with Qwen (`chat.qwen.ai`)
+through its REST API — no API key, no browser, no daemon. Pure stdlib
+(`urllib` + `http.client`). The chat-completions WAF (RGV587) is bypassed
+with the mobile app's request signature (`QwenChatAndroid/1.0` UA +
+`source: qwen_app`), which the WAF allowlists (verified live 2026-10-19).
 
-Designed primarily as an AI-to-AI consultation tool: an agent that's stuck or
-needs brainstorming can shell out to `ask-qwen` for a second opinion from Qwen.
+Designed primarily as an AI-to-AI consultation tool: an agent that's stuck
+can shell out to `ask-qwen` for a second opinion from Qwen.
 
 ## Architecture
 
 ```text
 CLI (argparse)
-  → daemon (Unix socket, auto-start, idle timeout)
-    → QwenWebClient (chat state, auth retry, ThreadPoolExecutor)
-      → PlaywrightBackend (headless Chromium, persistent profile)
-        → chat.qwen.ai
+  → auth.py   (signin/refresh vs auth.qwen.ai, tokens in auth.json)
+  → api.py    (chat endpoints vs chat.qwen.ai: stream_ask/list/transcript/
+               search/models/state.json)
 ```
 
 ## File Structure
@@ -27,52 +27,34 @@ ask-qwen/
 ├── README.md
 ├── CONTEXT.md
 ├── AGENT.md
-├── pyproject.toml
-├── .gitignore
+├── pyproject.toml          # zero runtime dependencies
 ├── src/ask_qwen/
-│   ├── __init__.py
-│   ├── config.py       # selectors, timeouts, paths
-│   ├── parser.py       # DOM text cleaning
-│   ├── browser.py      # Playwright automation
-│   ├── client.py       # chat state + auth retry
-│   ├── daemon.py       # background browser daemon + client proxy
-│   ├── cli.py          # argparse CLI
-│   └── login.py        # headed login helper
+│   ├── auth.py             # signin/refresh, auth.json (0600)
+│   ├── api.py              # chat REST API + SSE streaming + state.json
+│   ├── cli.py              # argparse CLI
+│   ├── config.py           # endpoints, app signature, limits
+│   └── login.py            # API login helper
 ├── tests/
-│   ├── test_parser.py
-│   ├── test_client_state.py
-│   ├── test_browser_lifecycle.py
-│   ├── test_cli.py
-│   └── test_daemon.py
-├── skills/
-│   └── ask-qwen/
-│       └── SKILL.md    # agent skill for AI-to-AI consultation
-└── scripts/
-    └── login.py
+│   ├── test_auth.py
+│   ├── test_api.py
+│   └── test_cli.py
+├── skills/ask-qwen/SKILL.md
+└── dev-notes/              # gitignored RE research (not pushed)
 ```
 
 ## Key Decisions
 
-- **Daemon architecture:** browser launches once, stays alive, CLI connects via
-  Unix socket. Eliminates 10s cold start on every call.
-- **UI automation only:** Alibaba WAF blocks all direct API variants. Verified.
-- **Persistent profile:** `~/.ask-qwen/profile/` stores browser state/cookies.
-- **Token refresh handling:** login button detection with 5s grace for JS token refresh.
-- **Response detection:** Stop button signal (primary) with text-stability fallback
-  (only when Stop was never seen — avoids premature return during thinking).
-- **Comparison UI:** Qwen sometimes shows A/B response comparison; parser extracts
-  first response and strips feedback noise.
-
-## Entry Points
-
-```text
-ask-qwen   # CLI (all subcommands including daemon auto-start)
-```
+- **Pure API:** RE of APK 2.1.0 + fe 0.3.19 proved every command can go over
+  HTTP; the browser/daemon/Playwright stack was deleted 2026-10-19.
+- **WAF bypass:** mobile UA/source signature; payload shape captured live from
+  the web UI (`version: "2.1"`, chatId+chat_id, fid/childrenIds messages).
+- **Stop lintas-proses:** `stop_requested` flag in state.json; stream_ask
+  polls it per chunk and calls the stop endpoint with the live response_id.
+- **Mode/model:** client-side concepts sent per-request via feature_config /
+  model field; persisted in state.json.
 
 ## State Directory: `~/.ask-qwen/`
 
-- `profile/` — Chromium persistent profile (cookies, storage)
-- `cookies.json` — optional cookie seed file
-- `daemon.sock` — Unix socket for CLI↔daemon communication
-- `daemon.pid` — daemon process ID
-- `ask-qwen.log` — daemon log output
+- `auth.json` — tokens (0600, never commit)
+- `state.json` — active_chat_id, thinking_mode, model, stop_requested
+- `profile/`, `cookies.json` — legacy browser era, no longer used

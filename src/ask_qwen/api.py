@@ -258,3 +258,186 @@ def is_generating(chat_id: str) -> bool:
         return False
     latest = max(assistants, key=lambda n: n.get("timestamp") or 0)
     return latest.get("done") is False
+
+
+# -- streaming chat (direct API, tanpa browser) ------------------------------
+#
+# WAF /chat/completions di-bypass dengan signature aplikasi mobile
+# (User-Agent QwenChatAndroid/1.0 + source qwen_app — verified live).
+# Payload mengikuti capture dari web UI (fe 0.3.19); respons SSE
+# `data: {...}` dengan chunk di choices[].delta.content (phase "answer").
+
+
+def _chat_headers(token: str) -> dict:
+    return {
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+        "x-request-id": str(uuid.uuid4()),
+        "source": config.CHAT_SOURCE,
+        "x-device-id": str(uuid.uuid4()),
+        "timezone": auth._timezone(),
+        "User-Agent": config.CHAT_UA,
+    }
+
+
+def request_stop() -> None:
+    """Tandai permintaan stop; stream_ask yang memproses (bisa lintas proses)."""
+    state = load_state()
+    state["stop_requested"] = True
+    save_state(state)
+
+
+def _feature_config(state: dict) -> tuple[str, dict]:
+    label = state.get("thinking_mode") or "Fast"
+    model = state.get("model") or "qwen3.7-plus"
+    fc = {
+        "thinking_enabled": label != "Fast",
+        "output_schema": "phase",
+        "research_mode": "normal",
+        "auto_thinking": label == "Auto",
+        "thinking_mode": label,
+        "auto_search": True,
+    }
+    return model, fc
+
+
+def stream_ask(message: str, on_delta=None, chat_id: str | None = None) -> dict:
+    """Kirim pesan ke Qwen dan stream jawabannya — murni HTTP, tanpa browser.
+
+    - on_delta(chunk): callback teks answer-phase saat streaming.
+    - Lanjutkan chat dari state.json (active_chat_id) atau chat_id arg;
+      buat chat baru bila belum ada.
+    - Stop lintas-proses: state.json stop_requested (ditulis cmd stop).
+    - Return {"chat_id", "answer", "response_id", "usage"}; active_chat_id
+      di state diperbarui ke chat ini.
+    """
+    import http.client
+    import socket
+    import time
+
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("message must not be empty")
+    if len(message) > config.MAX_MESSAGE_CHARS:
+        raise ValueError(
+            f"message exceeds maximum length of {config.MAX_MESSAGE_CHARS} characters"
+        )
+
+    token = auth.access_token()
+    if not token:
+        raise ApiError("belum login — jalankan: ask-qwen login")
+
+    state = load_state()
+    state.pop("stop_requested", None)  # bersihkan flag siklus sebelumnya
+    save_state(state)
+    if chat_id is None:
+        chat_id = state.get("active_chat_id")
+
+    parent = ""
+    if chat_id:
+        try:
+            data = _request("GET", f"/api/v2/chats/{chat_id}")
+            cur = (data.get("chat") or {}).get("history", {}).get("currentId")
+            if cur:
+                parent = cur
+        except ApiError:
+            chat_id = None  # chat terhapus/diarsipkan — mulai chat baru
+    if not chat_id:
+        chat_id = _request("POST", "/api/v2/chats/new", {"chat_mode": "normal", "project_id": None})["id"]
+
+    model, fc = _feature_config(state)
+    ts = int(time.time())
+    body = {
+        "stream": True,
+        "version": "2.1",
+        "incremental_output": True,
+        "chatId": chat_id,
+        "parentId": parent,
+        "chat_id": chat_id,
+        "chat_mode": "normal",
+        "model": model,
+        "parent_id": parent or None,
+        "messages": [{
+            "id": None,
+            "fid": str(uuid.uuid4()),
+            "parentId": parent or None,
+            "childrenIds": [str(uuid.uuid4())],
+            "role": "user",
+            "content": message,
+            "user_action": "chat",
+            "files": [],
+            "timestamp": ts,
+            "models": [model],
+            "model": "",
+            "chat_type": "t2t",
+            "sub_chat_type": "t2t",
+            "feature_config": fc,
+        }],
+        "timestamp": ts,
+    }
+
+    conn = http.client.HTTPSConnection("chat.qwen.ai", 443, timeout=config.CHAT_IDLE_TIMEOUT_S)
+    try:
+        conn.request(
+            "POST",
+            f"/api/v2/chat/completions?chat_id={chat_id}",
+            body=json.dumps(body).encode(),
+            headers=_chat_headers(token),
+        )
+        resp = conn.getresponse()
+        if resp.status != 200:
+            raise ApiError(f"HTTP {resp.status}: {resp.read()[:200]!r}")
+
+        answer_parts: list[str] = []
+        usage: dict = {}
+        response_id: str | None = None
+        while True:
+            try:
+                line = resp.readline()
+            except (socket.timeout, TimeoutError):
+                break  # diam lebih dari CHAT_IDLE_TIMEOUT_S — anggap selesai/hang
+            if not line:
+                break
+            line = line.decode("utf-8", "replace").strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if not payload or payload == "[DONE]":
+                break
+            try:
+                obj = json.loads(payload)
+            except ValueError:
+                continue
+            if obj.get("success") is False:
+                raise ApiError(str((obj.get("data") or {}).get("details", obj)))
+            created = obj.get("response.created") or {}
+            if created.get("response_id"):
+                response_id = created["response_id"]
+            for ch in obj.get("choices") or []:
+                delta = (ch.get("delta") or {})
+                if delta.get("phase") == "answer" and delta.get("content"):
+                    answer_parts.append(delta["content"])
+                    if on_delta:
+                        on_delta(delta["content"])
+            if obj.get("usage"):
+                usage = obj["usage"]
+
+            if response_id and load_state().get("stop_requested"):
+                try:
+                    _request(
+                        "POST",
+                        f"/api/v2/chat/completions/stop?chat_id={chat_id}",
+                        {"chat_id": chat_id, "response_id": response_id},
+                    )
+                except ApiError:
+                    pass
+                state = load_state()
+                state.pop("stop_requested", None)
+                save_state(state)
+                break
+    finally:
+        conn.close()
+
+    answer = "".join(answer_parts)
+    set_active_chat(chat_id)
+    return {"chat_id": chat_id, "answer": answer, "response_id": response_id, "usage": usage}

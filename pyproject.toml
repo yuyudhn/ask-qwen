@@ -3,9 +3,7 @@ name = "ask-qwen"
 version = "0.1.0"
 description = "CLI tool untuk berdiskusi dengan Qwen Web (chat.qwen.ai) via UI automation"
 requires-python = ">=3.11"
-dependencies = [
-    "playwright>=1.50.0",
-]
+dependencies = []
 
 [project.scripts]
 ask-qwen = "ask_qwen.cli:main"

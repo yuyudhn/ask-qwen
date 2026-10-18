@@ -16,8 +16,8 @@ Consult Qwen Web (chat.qwen.ai) as a second-opinion AI when you're stuck, need b
 
 - Simple factual lookups — use web search instead.
 - Tasks you can confidently handle yourself — don't add latency for no reason.
-- Anything involving secrets, credentials, or private data — the query goes through a real browser to chat.qwen.ai.
-- High-frequency polling — this is UI automation, keep it low-volume.
+- Anything involving secrets, credentials, or private data — the query goes to chat.qwen.ai over their API.
+- High-frequency polling — keep it low-volume.
 
 ## Prerequisites
 
@@ -25,8 +25,7 @@ Consult Qwen Web (chat.qwen.ai) as a second-opinion AI when you're stuck, need b
 
 ```bash
 pip install /path/to/ask-qwen  # or wherever it's installed
-playwright install chromium
-ask-qwen login                  # first-time only — opens browser for manual login
+ask-qwen login                  # first-time only — signs in via Qwen API
 ```
 
 Verify with `ask-qwen status` — it should show `"logged_in": true`.
@@ -39,7 +38,7 @@ Verify with `ask-qwen status` — it should show `"logged_in": true`.
 ask-qwen ask "What are the tradeoffs between event sourcing and CRUD for a small team?"
 ```
 
-The answer prints to stdout. The background daemon keeps the browser warm, so this is fast after the first call.
+The answer prints to stdout. Every call is a direct API request (~0.2s warm).
 
 ### Multi-Turn: Deep Dive
 
@@ -80,7 +79,7 @@ Use `thinking` for complex reasoning tasks. Use `fast` when you just need a quic
 ### Clean Up
 
 ```bash
-ask-qwen quit   # stop the daemon (optional — it auto-stops after 30 min idle)
+
 ```
 
 ## Consultation Patterns
@@ -145,5 +144,5 @@ ask-qwen ask "Explain the difference between PBKDF2, bcrypt, scrypt, and Argon2 
 - **Latency:** Each `ask` takes 5–30 seconds depending on Qwen's thinking time and server load.
 - **No file access:** Qwen can't see your filesystem. Paste relevant code/context into the prompt.
 - **Session expiry:** If you get auth errors, run `ask-qwen login` to re-authenticate.
-- **Rate limits:** This is UI automation on a free service. Don't hammer it — a few queries per session is the sweet spot.
+- **Rate limits:** Free service — don't hammer it; a few queries per session is the sweet spot.
 - **Qwen overload:** During high demand, Qwen may return "service experiencing high demand" errors. Wait a few seconds and retry.

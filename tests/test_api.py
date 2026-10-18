@@ -1,3 +1,5 @@
+import json
+
 from ask_qwen import api
 
 
@@ -65,6 +67,80 @@ class TestSearchChats:
 
         with pytest.raises(ValueError):
             api.search_chats("  ")
+
+
+class TestStreamAsk:
+    """stream_ask dengan HTTP layer palsu: payload, parse SSE, state update."""
+
+    SSE = (
+        'data: {"response.created": {"response_id": "resp-1"}}\n'
+        '\n'
+        'data: {"choices": [{"delta": {"phase": "answer", "content": "Hel"}}]}\n'
+        '\n'
+        'data: {"choices": [{"delta": {"phase": "answer", "content": "lo"}}]}\n'
+        '\n'
+        'data: {"usage": {"output_tokens": 2}}\n'
+        '\n'
+    )
+
+    def _fake_state(self, monkeypatch):
+        box = {"active_chat_id": None}
+        monkeypatch.setattr(api, "load_state", lambda: dict(box))
+        monkeypatch.setattr(api, "save_state", lambda s: box.update(s))
+        monkeypatch.setattr(api, "set_active_chat", lambda cid: box.update(active_chat_id=cid))
+        return box
+
+    def test_asks_and_collects_answer(self, monkeypatch):
+        box = self._fake_state(monkeypatch)
+        monkeypatch.setattr(api.auth, "access_token", lambda: "tok")
+        monkeypatch.setattr(
+            api, "_request", lambda m, p, payload=None: {"id": "chat-new"} if "chats/new" in p else {},
+        )
+
+        class FakeResp:
+            status = 200
+
+            def readline(self):
+                if self._lines:
+                    return self._lines.pop(0)
+                return b""
+
+            _lines = [l.encode() + b"\n" for l in self.SSE.splitlines()]
+
+        class FakeConn:
+            def __init__(self, *a, **k):
+                pass
+
+            def request(self, *a, **k):
+                body = json.loads(k["body"])
+                assert body["chatId"] == "chat-new"
+                assert body["messages"][0]["content"] == "halo"
+                assert body["messages"][0]["feature_config"]["output_schema"] == "phase"
+
+            def getresponse(self):
+                return FakeResp()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("http.client.HTTPSConnection", FakeConn)
+        deltas = []
+        result = api.stream_ask("halo", on_delta=deltas.append)
+        assert result["answer"] == "Hello"
+        assert deltas == ["Hel", "lo"]
+        assert result["response_id"] == "resp-1"
+        assert box["active_chat_id"] == "chat-new"
+
+    def test_rejects_empty_and_oversized(self, monkeypatch):
+        self._fake_state(monkeypatch)
+        monkeypatch.setattr(api.auth, "access_token", lambda: "tok")
+        import pytest
+
+        with pytest.raises(ValueError):
+            api.stream_ask("   ")
+        monkeypatch.setattr(api.config, "MAX_MESSAGE_CHARS", 3)
+        with pytest.raises(ValueError):
+            api.stream_ask("toolong")
 
 
 class TestIsGenerating:
