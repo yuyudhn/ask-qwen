@@ -102,6 +102,10 @@ class PlaywrightBackend:
         self._page = None
         self.has_active_chat = False
         self.applied_mode: str | None = None  # thinking mode terakhir diterapkan
+        # Permintaan stop lintas-thread: RPC handler men-set; poll loop ask
+        # (thread browser) yang mengklik Stop dan mengonsumsi. Semantik: batalkan
+        # generasi yang sedang/sedang-akan berjalan; natural completion membersihkan.
+        self._stop_pending = False
         self._operation_lock = threading.RLock()
 
     # -- lifecycle ---------------------------------------------------------
@@ -335,6 +339,15 @@ class PlaywrightBackend:
                     stop_visible = False
                 if stop_visible:
                     stop_ever_seen = True
+                if self._stop_pending and stop_visible:
+                    # stop dari RPC (flag lintas-thread): klik Stop dari thread
+                    # browser, loop berikutnya melihat Stop hilang -> return.
+                    try:
+                        stop.click()
+                    except Exception:
+                        log.exception("Gagal klik Stop atas request_stop")
+                    self._stop_pending = False
+                    stop_ever_seen = True
                 try:
                     current = main.inner_text()
                 except Exception:
@@ -371,6 +384,9 @@ class PlaywrightBackend:
             raise PWTimeoutError("Respons Qwen tidak selesai dalam batas waktu.")
         finally:
             flush()
+            # Stop yang tak terkonsumsi (mis. tiba saat idle lalu tak ada
+            # generasi) dibersihkan saat ask berakhir natural.
+            self._stop_pending = False
 
     def _new_chat_in_page(self, page) -> None:
         try:
@@ -409,6 +425,15 @@ class PlaywrightBackend:
                 return "Tidak ada generasi aktif."
             stop.click()
             return "Generasi dihentikan."
+
+    def request_stop(self) -> None:
+        """Minta generasi yang sedang/akan berjalan berhenti (aman lintas thread).
+
+        Hanya men-set flag; poll loop di thread browser yang mengklik Stop.
+        Dipakai oleh RPC daemon — tidak boleh lewat executor (akan antri di
+        belakang ask yang sedang berjalan).
+        """
+        self._stop_pending = True
 
     def get_status(self) -> dict:
         with self._operation_lock:
@@ -600,6 +625,10 @@ class PlaywrightBackend:
             )
             url = page.url if "/c/" in (page.url or "") else config.BASE_URL
             page.goto(url, timeout=config.NAV_TIMEOUT_MS, wait_until="domcontentloaded")
-            page.wait_for_timeout(1500)  # boot app + init store dari localStorage
+            # Tunggu app benar-benar siap (textarea = boot selesai), bukan sleep
+            # tetap — SPA boot bisa lebih lambat dari 1.5s dan race dengan ask.
+            page.wait_for_selector(
+                config.TEXTAREA_SEL, timeout=config.NAV_TIMEOUT_MS, state="visible"
+            )
             self.applied_mode = label
             return f"Mode diatur ke {label}."

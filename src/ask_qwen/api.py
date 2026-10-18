@@ -120,21 +120,6 @@ def chat_exists(chat_id: str) -> bool:
         return False
 
 
-def stop_generation(chat_id: str) -> str:
-    """Hentikan generasi aktif pada chat; kembalikan detail dari server.
-
-    response_id diambil dari currentResponseIds chat (generasi yang sedang jalan);
-    endpoint ini lolos WAF (terverifikasi live, lihat dev-notes).
-    """
-    data = _request("GET", f"/api/v2/chats/{chat_id}")
-    response_ids = data.get("currentResponseIds") or []
-    payload = {"chat_id": chat_id, "response_id": response_ids[0] if response_ids else ""}
-    result = _request("POST", f"/api/v2/chat/completions/stop?chat_id={chat_id}", payload)
-    if isinstance(result, dict) and result.get("details"):
-        return str(result["details"])
-    return "Stop request dikirim."
-
-
 # -- transcript -------------------------------------------------------------
 
 

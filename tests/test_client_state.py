@@ -18,6 +18,7 @@ class FakeBackend:
         self.calls: list[str] = []
         self.active = False
         self.applied_mode = None
+        self.stop_flags = 0
 
     def ask(self, message: str, on_delta=None) -> str:
         self.calls.append(f"ask:{message}")
@@ -79,6 +80,9 @@ class FakeBackend:
     def stop_generation(self) -> str:
         self.calls.append("stop_generation")
         return "Generasi dihentikan."
+
+    def request_stop(self) -> None:
+        self.stop_flags += 1
 
     def get_status(self) -> dict:
         self.calls.append("get_status")
@@ -230,12 +234,13 @@ class TestClientState:
         c.ask("halo")
         assert b.calls == ["new_chat", "apply_thinking_mode:Thinking", "ask:halo"]
 
-    def test_stop_generation_delegates_to_backend(self):
+    def test_stop_generation_sets_flag_directly(self):
         b = FakeBackend()
         c = QwenWebClient(backend=b)
 
-        assert c.stop_generation() == "Generasi dihentikan."
-        assert b.calls == ["stop_generation"]
+        assert c.stop_generation() == "Stop request diterima."
+        assert b.stop_flags == 1  # langsung, tanpa lewat executor/browser thread
+        assert b.calls == []
 
     def test_get_status_delegates_to_backend(self):
         b = FakeBackend()

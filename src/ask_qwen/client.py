@@ -178,7 +178,11 @@ class QwenWebClient:
             return "Login Qwen kadaluarsa. Jalankan `ask-qwen login`."
 
     def stop_generation(self) -> str:
-        return self._run(self.backend.stop_generation)
+        # Langsung, BUKAN via executor single-thread: request hanya men-set flag
+        # yang dibaca poll loop ask di thread browser — aman lintas thread dan
+        # tidak mengantri di belakang ask yang sedang berjalan.
+        self.backend.request_stop()
+        return "Stop request diterima."
 
     def get_status(self) -> dict:
         return self._run(self.backend.get_status)

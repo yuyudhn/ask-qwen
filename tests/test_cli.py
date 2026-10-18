@@ -63,7 +63,7 @@ class FakeClient:
     def stop_generation(self):
         self.calls.append(("stop",))
         self._maybe_raise()
-        return "Tidak ada generasi aktif."
+        return "Stop request diterima."
 
     def get_status(self):
         self.calls.append(("status",))
@@ -177,24 +177,19 @@ class TestCommandDispatch:
         assert out[0]["content"] == "hi"
         assert fake_client.calls == []  # open tidak lagi lewat daemon
 
-    def test_stop(self, fake_client, parser, capsys, monkeypatch):
-        from ask_qwen import api
-
-        monkeypatch.setattr(api, "load_state", lambda: {"active_chat_id": "cid-1"})
-        monkeypatch.setattr(api, "stop_generation", lambda cid: f"stopped-{cid}")
+    def test_stop_warm_daemon_sends_request(self, fake_client, parser, capsys, monkeypatch):
+        monkeypatch.setattr(cli.daemon, "is_running", lambda: True)
         args = parser.parse_args(["stop"])
         args.func(args)
-        assert capsys.readouterr().out.strip() == "stopped-cid-1"
-        assert fake_client.calls == []  # stop tidak lagi lewat daemon
+        assert fake_client.calls == [("stop",)]
+        assert "stop request" in capsys.readouterr().out.lower()
 
-    def test_stop_without_active_chat_errors(self, fake_client, parser, capsys, monkeypatch):
-        from ask_qwen import api
-
-        monkeypatch.setattr(api, "load_state", lambda: {})
+    def test_stop_cold_daemon_reports_idle(self, fake_client, parser, capsys, monkeypatch):
+        monkeypatch.setattr(cli.daemon, "is_running", lambda: False)
         args = parser.parse_args(["stop"])
-        with pytest.raises(SystemExit):
-            args.func(args)
-        assert "tidak ada chat aktif" in capsys.readouterr().err.lower()
+        args.func(args)
+        assert "tidak ada" in capsys.readouterr().out.lower()
+        assert fake_client.calls == []
 
     def test_status(self, fake_client, parser, capsys):
         args = parser.parse_args(["status"])

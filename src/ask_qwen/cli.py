@@ -174,17 +174,14 @@ def cmd_set_mode(args) -> None:
 
 
 def cmd_stop(args) -> None:
-    from . import api
-
-    chat_id = api.load_state().get("active_chat_id")
-    if not chat_id:
-        print(
-            "Error: tidak ada chat aktif. Gunakan `ask-qwen ask` atau `ask-qwen open` dulu.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-    result = _run(api.stop_generation, chat_id)
-    print(result)
+    # Stop mid-flight HANYA bisa lewat flag lintas-thread di daemon: RPC biasa
+    # antri di belakang ask (executor single-thread), API server-side tidak bisa
+    # mengidentifikasi response_id yang sedang berjalan (currentResponseIds
+    # berisi id generasi SEBELUMNYA — terverifikasi live, lihat dev-notes).
+    if daemon.is_running():
+        print(_run(_get_client().stop_generation))
+    else:
+        print("Tidak ada generasi aktif (daemon tidak berjalan).")
 
 
 def cmd_status(args) -> None:

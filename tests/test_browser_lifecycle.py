@@ -436,6 +436,9 @@ class _StoragePage:
         self.gotos.append(url)
         self.url = url
 
+    def wait_for_selector(self, *args, **kwargs):
+        return None
+
     def wait_for_timeout(self, ms):
         return None
 
