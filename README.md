@@ -15,12 +15,19 @@ CLI (argparse) → auth.py (signin/refresh) + api.py (chat endpoints) → chat.q
 ## Install
 
 ```bash
+# from PyPI-style git URL
+uv tool install git+https://github.com/yuyudhn/ask-qwen.git
+
+# or from a local clone
 git clone git@github.com:yuyudhn/ask-qwen.git
 cd ask-qwen
-pip install .
+uv tool install .
 ```
 
-No browser, no Playwright, no daemon.
+Update later with `uv tool upgrade ask-qwen`.
+
+No browser, no Playwright, no daemon — the tool is pure stdlib, so the
+installed footprint is tiny.
 
 ## First-Time Login
 
@@ -89,7 +96,10 @@ ask-qwen ask "What if I add a mutex around the send? Would that deadlock?"
 ## Development
 
 ```bash
-pip install -e . --group dev
+git clone git@github.com:yuyudhn/ask-qwen.git
+cd ask-qwen
+uv venv && source .venv/bin/activate
+uv pip install -e . --group dev
 pytest
 ```
 
