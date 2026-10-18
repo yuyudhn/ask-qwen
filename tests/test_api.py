@@ -67,6 +67,29 @@ class TestSearchChats:
             api.search_chats("  ")
 
 
+class TestStopGeneration:
+    def test_uses_current_response_id(self, monkeypatch):
+        calls = []
+
+        def fake(method, path, payload=None):
+            calls.append((method, path, payload))
+            if method == "GET":
+                return {"currentResponseIds": ["resp-1", "resp-2"]}
+            return {"status": True, "details": "stopped"}
+
+        monkeypatch.setattr(api, "_request", fake)
+        result = api.stop_generation("chat-1")
+        get_call, post_call = calls
+        assert get_call[0] == "GET" and "/api/v2/chats/chat-1" in get_call[1]
+        assert post_call[0] == "POST" and "stop?chat_id=chat-1" in post_call[1]
+        assert post_call[2]["response_id"] == "resp-1"
+        assert result == "stopped"
+
+    def test_tolerates_empty_response_ids(self, monkeypatch):
+        monkeypatch.setattr(api, "_request", lambda m, p, payload=None: {} if m == "GET" else {})
+        assert api.stop_generation("chat-1") == "Stop request dikirim."
+
+
 class TestParseChatId:
     def test_accepts_bare_id_and_url(self):
         cid = "aaaa1111-bbbb-2222-cccc-3333dddd4444"  # id sintetis, bukan data asli

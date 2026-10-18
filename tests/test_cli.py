@@ -177,6 +177,25 @@ class TestCommandDispatch:
         assert out[0]["content"] == "hi"
         assert fake_client.calls == []  # open tidak lagi lewat daemon
 
+    def test_stop(self, fake_client, parser, capsys, monkeypatch):
+        from ask_qwen import api
+
+        monkeypatch.setattr(api, "load_state", lambda: {"active_chat_id": "cid-1"})
+        monkeypatch.setattr(api, "stop_generation", lambda cid: f"stopped-{cid}")
+        args = parser.parse_args(["stop"])
+        args.func(args)
+        assert capsys.readouterr().out.strip() == "stopped-cid-1"
+        assert fake_client.calls == []  # stop tidak lagi lewat daemon
+
+    def test_stop_without_active_chat_errors(self, fake_client, parser, capsys, monkeypatch):
+        from ask_qwen import api
+
+        monkeypatch.setattr(api, "load_state", lambda: {})
+        args = parser.parse_args(["stop"])
+        with pytest.raises(SystemExit):
+            args.func(args)
+        assert "tidak ada chat aktif" in capsys.readouterr().err.lower()
+
     def test_status(self, fake_client, parser, capsys):
         args = parser.parse_args(["status"])
         args.func(args)
