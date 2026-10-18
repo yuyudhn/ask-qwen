@@ -440,4 +440,4 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None) -> dict:
 
     answer = "".join(answer_parts)
     set_active_chat(chat_id)
-    return {"chat_id": chat_id, "answer": answer, "response_id": response_id, "usage": usage}
+    return {"chat_id": chat_id, "answer": answer, "response_id": response_id, "usage": usage, "model": model}

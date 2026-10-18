@@ -34,7 +34,8 @@ Signs in via `auth.qwen.ai`. The password is SHA-256 hashed client-side before i
 
 ```bash
 ask-qwen ask "Explain the CAP theorem in 2 sentences"
-ask-qwen ask "Give me a real-world example"          # continues the same chat
+ask-qwen ask --json "Explain the CAP theorem"   # machine-readable: answer, chat_id, usage, model
+ask-qwen ask "Give me a real-world example"     # continues the same chat
 
 ask-qwen new                                        # next ask starts a fresh chat
 ask-qwen read                                       # transcript of the active chat (JSON)

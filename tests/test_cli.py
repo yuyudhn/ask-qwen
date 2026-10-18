@@ -41,6 +41,17 @@ class TestCommandDispatch:
         args.func(args)
         assert capsys.readouterr().out.strip() == "answer:ping"
 
+    def test_ask_json_outputs_structured_result(self, parser, capsys, monkeypatch):
+        result = {
+            "answer": "answer:ping", "chat_id": "c1", "response_id": "r1",
+            "usage": {"output_tokens": 3}, "model": "qwen3.7-plus",
+        }
+        monkeypatch.setattr(api, "stream_ask", lambda msg, on_delta=None: result)
+        args = parser.parse_args(["ask", "--json", "ping"])
+        args.func(args)
+        out = json.loads(capsys.readouterr().out)
+        assert out == result
+
     def test_read_uses_active_chat(self, parser, capsys, monkeypatch):
         monkeypatch.setattr(api, "load_state", lambda: {"active_chat_id": "chat-1"})
         monkeypatch.setattr(

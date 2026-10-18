@@ -60,7 +60,10 @@ def cmd_ask(args) -> None:
     message = " ".join(args.message)
     with _Spinner():
         result = _run(api.stream_ask, message)
-    print(result["answer"])
+    if args.json:
+        _print_json(result)
+    else:
+        print(result["answer"])
 
 
 def cmd_read(args) -> None:
@@ -178,6 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("ask", help="Send a message and get the answer")
     p.add_argument("message", nargs="+", help="Message to send")
+    p.add_argument("--json", action="store_true", help="Machine-readable output (answer, chat_id, usage, model)")
     p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("read", help="Read the active chat transcript")
