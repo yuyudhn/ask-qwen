@@ -160,7 +160,9 @@ def cmd_status(args) -> None:
 
 
 def cmd_search(args) -> None:
-    result = _run(_get_client().search_chats, args.query)
+    from . import api
+
+    result = _run(api.search_chats, args.query)
     _print_json(result)
 
 

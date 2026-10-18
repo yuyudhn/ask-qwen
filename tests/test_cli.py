@@ -160,10 +160,18 @@ class TestCommandDispatch:
         out = json.loads(capsys.readouterr().out)
         assert out["logged_in"] is True
 
-    def test_search(self, fake_client, parser, capsys):
+    def test_search(self, fake_client, parser, capsys, monkeypatch):
+        from ask_qwen import api
+
+        monkeypatch.setattr(
+            api, "search_chats",
+            lambda q: [{"title": f"found-{q}", "url": "https://chat.qwen.ai/c/2", "id": "2"}],
+        )
         args = parser.parse_args(["search", "topic"])
         args.func(args)
-        assert fake_client.calls == [("search", "topic")]
+        out = json.loads(capsys.readouterr().out)
+        assert out[0]["title"] == "found-topic"
+        assert fake_client.calls == []  # search tidak lagi lewat daemon
 
     def test_ask_streams_on_tty(self, fake_client, parser, capsys, monkeypatch):
         monkeypatch.setattr(sys.stdout, "isatty", lambda: True)

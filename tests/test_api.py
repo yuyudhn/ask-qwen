@@ -46,6 +46,27 @@ class TestListChats:
         assert len(api.list_chats(20)) == 1
 
 
+class TestSearchChats:
+    def test_url_encodes_query_and_maps_items(self, monkeypatch):
+        seen = {}
+
+        def fake(method, path, payload=None):
+            seen["path"] = path
+            return [{"id": "x" * 36, "title": "a & b", "updated_at": 5, "created_at": 4}]
+
+        monkeypatch.setattr(api, "_request", fake)
+        items = api.search_chats("a & b")
+        assert "text=a%20%26%20b" in seen["path"]
+        assert items[0]["title"] == "a & b"
+        assert items[0]["id"] == "x" * 36
+
+    def test_rejects_empty_query(self):
+        import pytest
+
+        with pytest.raises(ValueError):
+            api.search_chats("  ")
+
+
 class TestParseChatId:
     def test_accepts_bare_id_and_url(self):
         cid = "aaaa1111-bbbb-2222-cccc-3333dddd4444"  # id sintetis, bukan data asli
