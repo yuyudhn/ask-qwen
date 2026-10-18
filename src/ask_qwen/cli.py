@@ -116,7 +116,9 @@ def cmd_new_chat(args) -> None:
 
 
 def cmd_list_chats(args) -> None:
-    result = _run(_get_client().list_chats, args.limit)
+    from . import api
+
+    result = _run(api.list_chats, args.limit)
     _print_json(result)
 
 

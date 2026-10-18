@@ -21,6 +21,7 @@ API_UA = (
 # tanpa ini (405 / "Invalid request header"). Bisa berubah di versi app baru.
 APP_WAF_TOKEN = "Z9Tr56YmQpXcO2K_d_3nAbJvRqMLFW8HTNjvRguWHEowM1xY"
 AUTH_FILE = STATE_DIR / "auth.json"
+STATE_FILE = STATE_DIR / "state.json"  # active_chat_id, dibagi CLI <-> daemon
 
 # Selectors (hasil verifikasi 2026-10-19; Qwen bisa mengubah kapan pun)
 # Placeholder berubah dari "Ask Qwen" → "How can I help you today?" (fe 0.3.19);
