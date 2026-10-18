@@ -1,6 +1,5 @@
 STATE_DIR_NAME = ".ask-qwen"
 
-import os
 import pathlib
 
 STATE_DIR = pathlib.Path.home() / STATE_DIR_NAME
@@ -26,11 +25,11 @@ AUTH_FILE = STATE_DIR / "auth.json"
 STATE_FILE = STATE_DIR / "state.json"  # active_chat_id, thinking_mode, model, stop_requested
 
 # Guard boundaries before large values reach the API.
-MAX_MESSAGE_CHARS = int(os.getenv("QWEN_MAX_MESSAGE_CHARS", "100000"))
-MAX_HISTORY_ITEMS = int(os.getenv("QWEN_MAX_HISTORY_ITEMS", "100"))
+MAX_MESSAGE_CHARS = 100_000
+MAX_HISTORY_ITEMS = 100
 
 # Mode/thinking dikirim per-request via feature_config; label disimpan di state.
 MODES = ("auto", "thinking", "fast")
 
 # Batas streaming chat: diam total selama ini -> anggap hang dan putus.
-CHAT_IDLE_TIMEOUT_S = int(os.getenv("ASK_QWEN_CHAT_IDLE_TIMEOUT", "120"))
+CHAT_IDLE_TIMEOUT_S = 120

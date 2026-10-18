@@ -76,12 +76,6 @@ ask-qwen mode auto        # let Qwen decide
 
 Use `thinking` for complex reasoning tasks. Use `fast` when you just need a quick factual answer.
 
-### Clean Up
-
-```bash
-
-```
-
 ## Consultation Patterns
 
 ### Pattern 1: Brainstorm Alternatives

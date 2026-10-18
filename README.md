@@ -78,14 +78,6 @@ ask-qwen ask "What if I add a mutex around the send? Would that deadlock?"
 | `search <query>` | Search chats by text. |
 | `login` | Sign in via Qwen API. |
 
-## Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `QWEN_MAX_MESSAGE_CHARS` | `100000` | Max input message length. |
-| `QWEN_MAX_HISTORY_ITEMS` | `100` | Max chat history items from `list`. |
-| `ASK_QWEN_CHAT_IDLE_TIMEOUT` | `120` | Max stream silence before the connection is dropped. |
-
 ## Limitations & Risks
 
 - Automating a web chat may violate Qwen's Terms of Service — use for personal, low-volume purposes only.
