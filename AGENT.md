@@ -37,9 +37,11 @@ behavior, payload shapes, gotchas) lives in `dev-notes/qwen-api-research.md` —
   once, then refresh. Never retry-loop signin.
 - **Password hashing**: SHA-256 hex client-side before signin; the server
   rejects plaintext with `INVALID_CRED`.
-- **Multi-turn linkage**: new message's `parentId` = `history.currentId` from
-  `GET /api/v2/chats/{id}`; first message uses `parentId: ""`. Payload version
-  is `"2.1"`; timestamps in **seconds**.
+- **Multi-turn linkage**: new turn's `parentId` = the latest **user** message id
+  (the server chains user nodes; responses hang under them). Using the
+  response id / `currentId` creates a branch whose context is only the last
+  exchange — earlier turns silently vanish (verified live 2026-10-19).
+  Payload version is `"2.1"`; timestamps in **seconds**.
 - **Stop**: server-side stop needs the **live** `response_id` from the
   `response.created` SSE event (`currentResponseIds` is stale — never use it).
   Cross-process stop = `stop_requested` flag in `state.json`, polled per chunk.

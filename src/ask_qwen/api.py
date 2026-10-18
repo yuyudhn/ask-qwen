@@ -339,9 +339,14 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
     if chat_id:
         try:
             data = _request("GET", f"/api/v2/chats/{chat_id}")
-            cur = (data.get("chat") or {}).get("history", {}).get("currentId")
-            if cur:
-                parent = cur
+            nodes = (data.get("chat") or {}).get("history", {}).get("messages") or {}
+            # Pohon server merantai USER message (parent user = user sebelumnya;
+            # response jadi anak dari user). Parent turn baru harus user
+            # terakhir — pakai response id (currentId) justru membuat cabang
+            # yang kehilangan konteks turn sebelumnya (verified live).
+            users = [(mid, n) for mid, n in nodes.items() if isinstance(n, dict) and n.get("role") == "user"]
+            if users:
+                parent = max(users, key=lambda t: t[1].get("timestamp") or 0)[0]
         except ApiError:
             chat_id = None  # chat terhapus/diarsipkan — mulai chat baru
     if not chat_id:
