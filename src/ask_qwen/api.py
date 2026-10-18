@@ -112,12 +112,6 @@ def search_chats(query: str, limit: int = 20) -> list[dict]:
     return items[:limit]
 
 
-def new_chat() -> str:
-    """Buat chat kosong via API; kembalikan chat id."""
-    data = _request("POST", "/api/v2/chats/new", {"chat_mode": "normal", "project_id": None})
-    return data["id"]
-
-
 def chat_exists(chat_id: str) -> bool:
     try:
         _request("GET", f"/api/v2/chats/{chat_id}")

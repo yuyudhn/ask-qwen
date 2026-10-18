@@ -149,10 +149,33 @@ class TestCommandDispatch:
             args.func(args)
         assert "tidak ada chat aktif" in capsys.readouterr().err.lower()
 
-    def test_new_chat(self, fake_client, parser, capsys):
+    def test_new_chat(self, fake_client, parser, capsys, monkeypatch):
+        from ask_qwen import api
+
+        seen = {}
+        monkeypatch.setattr(api, "set_active_chat", lambda cid: seen.update(cid=cid))
         args = parser.parse_args(["new"])
         args.func(args)
-        assert fake_client.calls == [("new_chat",)]
+        assert seen["cid"] is None  # marker: ask berikutnya buat chat baru
+        assert "chat baru" in capsys.readouterr().out.lower()
+        assert fake_client.calls == []  # new tidak lagi lewat daemon
+
+    def test_open_chat(self, fake_client, parser, capsys, monkeypatch):
+        from ask_qwen import api
+
+        monkeypatch.setattr(api, "chat_exists", lambda cid: cid == "cid-1")
+        monkeypatch.setattr(api, "parse_chat_id", lambda ref: "cid-1")
+        monkeypatch.setattr(
+            api, "chat_transcript", lambda cid: [{"role": "user", "content": "hi"}],
+        )
+        seen = {}
+        monkeypatch.setattr(api, "set_active_chat", lambda cid: seen.update(cid=cid))
+        args = parser.parse_args(["open", "https://chat.qwen.ai/c/cid-1"])
+        args.func(args)
+        assert seen["cid"] == "cid-1"
+        out = json.loads(capsys.readouterr().out)
+        assert out[0]["content"] == "hi"
+        assert fake_client.calls == []  # open tidak lagi lewat daemon
 
     def test_status(self, fake_client, parser, capsys):
         args = parser.parse_args(["status"])

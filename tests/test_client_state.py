@@ -1,6 +1,15 @@
 from ask_qwen.browser import AuthExpired
 from ask_qwen.client import QwenWebClient
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_real_state(monkeypatch):
+    """Jangan sentuh state.json asli saat test client."""
+    monkeypatch.setattr("ask_qwen.api.load_state", lambda: {})
+    monkeypatch.setattr("ask_qwen.api.set_active_chat", lambda cid: None)
+
 
 class FakeBackend:
     def __init__(self, fail_auth_times: int = 0):
@@ -23,6 +32,17 @@ class FakeBackend:
         self.calls.append("new_chat")
         self.active = True
         return "Chat baru siap."
+
+    def goto_chat(self, chat_id: str) -> str:
+        self.calls.append(f"goto_chat:{chat_id}")
+        self.active = True
+        return f"Chat dibuka: {chat_id}"
+
+    @property
+    def page(self):
+        import types
+
+        return types.SimpleNamespace(url="https://chat.qwen.ai/c/fake-1")
 
     def read(self) -> list[dict]:
         self.calls.append("read")
@@ -86,6 +106,22 @@ class TestClientState:
         c.new_chat()
         c.ask("halo")
         assert b.calls == ["new_chat", "ask:halo"]  # tidak ada new_chat ganda
+
+    def test_ask_opens_chat_from_state(self, monkeypatch):
+        monkeypatch.setattr("ask_qwen.api.load_state", lambda: {"active_chat_id": "cid-9"})
+        b = FakeBackend()
+        c = QwenWebClient(backend=b)
+        result = c.ask("halo")
+        assert result == "answer:halo"
+        assert b.calls == ["goto_chat:cid-9", "ask:halo"]  # tanpa new_chat
+
+    def test_ask_state_null_forces_new_chat(self, monkeypatch):
+        monkeypatch.setattr("ask_qwen.api.load_state", lambda: {"active_chat_id": None})
+        b = FakeBackend()
+        c = QwenWebClient(backend=b)
+        c.chat_active = True  # daemon menganggap masih aktif — null tetap menang
+        c.ask("halo")
+        assert b.calls == ["new_chat", "ask:halo"]
 
     def test_auth_expired_retries_after_refresh(self, monkeypatch):
         monkeypatch.setattr("ask_qwen.auth.refresh", lambda: {"access_token": "x"})

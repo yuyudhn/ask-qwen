@@ -379,6 +379,17 @@ class PlaywrightBackend:
             self.has_active_chat = True
             return "Chat baru siap."
 
+    def goto_chat(self, chat_id: str) -> str:
+        """Buka chat tertentu via URL (sinkronisasi state API → browser).
+
+        Menggantikan klik sidebar — id didapat dari API, navigasi langsung.
+        """
+        with self._operation_lock:
+            url = f"{config.BASE_URL}/c/{chat_id}"
+            self.page.goto(url, timeout=config.NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+            self.has_active_chat = True
+            return f"Chat dibuka: {url}"
+
     def stop_generation(self) -> str:
         with self._operation_lock:
             if not self._is_logged_in():

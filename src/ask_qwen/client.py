@@ -58,19 +58,22 @@ class QwenWebClient:
         return True
 
     def _ask_once(self, message: str, on_delta=None) -> str:
-        if not self.chat_active:
-            self.backend.new_chat()
+        from . import api
+
+        # State dari perintah API: id → buka chat itu; None → paksa chat baru;
+        # tanpa key → perilaku lama (chat aktif daemon atau new_chat UI).
+        # Catatan: chat kosong hasil API tidak diadopsi UI saat send — pesan
+        # akan membuat chat baru di server — jadi `new` hanya menandai null.
+        sid = api.load_state().get("active_chat_id", "unset")
+        if sid != "unset" or not self.chat_active:
+            if sid not in ("unset", None):
+                self.backend.goto_chat(sid)
+            else:
+                self.backend.new_chat()
             self.chat_active = True
         result = self.backend.ask(message, on_delta)
         # catat chat aktif agar perintah CLI lain (read via API) tahu chat id
-        try:
-            url = self.backend.page.url
-            if "/c/" in url:
-                from . import api
-
-                api.set_active_chat(url.rsplit("/c/", 1)[-1])
-        except Exception:
-            pass
+        self._record_active_chat()
         return result
 
     def read(self) -> list[dict]:
@@ -107,7 +110,19 @@ class QwenWebClient:
     def _new_chat_once(self) -> str:
         result = self.backend.new_chat()
         self.chat_active = True
+        self._record_active_chat()
         return result
+
+    def _record_active_chat(self) -> None:
+        """Simpan chat id aktif (dari URL browser) ke state.json untuk API CLI."""
+        try:
+            url = self.backend.page.url
+            if "/c/" in url:
+                from . import api
+
+                api.set_active_chat(url.rsplit("/c/", 1)[-1])
+        except Exception:
+            pass
 
     def list_chats(self, limit: int = 20) -> list[dict]:
         if not isinstance(limit, int) or limit < 1:

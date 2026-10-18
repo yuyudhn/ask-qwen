@@ -120,8 +120,12 @@ def cmd_read(args) -> None:
 
 
 def cmd_new_chat(args) -> None:
-    result = _run(_get_client().new_chat)
-    print(result)
+    from . import api
+
+    # Tandai "chat baru" di state; chat sesungguhnya dibuat UI saat ask berikut
+    # (chat kosong hasil API tidak diadopsi UI saat send — menghindari orphan).
+    api.set_active_chat(None)
+    print("Chat akan direset — pertanyaan berikutnya membuat chat baru.")
 
 
 def cmd_list_chats(args) -> None:
@@ -140,7 +144,14 @@ def cmd_read_chat(args) -> None:
 
 
 def cmd_open_chat(args) -> None:
-    result = _run(_get_client().open_chat, args.url)
+    from . import api
+
+    chat_id = _run(api.parse_chat_id, args.url)
+    if not _run(api.chat_exists, chat_id):
+        print(f"Error: chat tidak ditemukan: {chat_id}", file=sys.stderr)
+        raise SystemExit(1)
+    api.set_active_chat(chat_id)
+    result = _run(api.chat_transcript, chat_id)
     _print_json(result)
 
 
