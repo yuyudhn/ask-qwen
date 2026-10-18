@@ -191,11 +191,19 @@ class TestCommandDispatch:
         assert "tidak ada" in capsys.readouterr().out.lower()
         assert fake_client.calls == []
 
-    def test_status(self, fake_client, parser, capsys):
+    def test_status(self, fake_client, parser, capsys, monkeypatch):
+        from ask_qwen import api, auth
+
+        monkeypatch.setattr(auth, "session_ok", lambda: True)
+        monkeypatch.setattr(api, "load_state", lambda: {"active_chat_id": "cid-1"})
+        monkeypatch.setattr(api, "is_generating", lambda cid: True)
         args = parser.parse_args(["status"])
         args.func(args)
         out = json.loads(capsys.readouterr().out)
         assert out["logged_in"] is True
+        assert out["generating"] is True
+        assert out["chat_id"] == "cid-1"
+        assert fake_client.calls == []  # status tidak lagi lewat daemon
 
     def test_search(self, fake_client, parser, capsys, monkeypatch):
         from ask_qwen import api

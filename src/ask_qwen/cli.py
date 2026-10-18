@@ -206,9 +206,31 @@ def cmd_stop(args) -> None:
         print("Tidak ada generasi aktif (daemon tidak berjalan).")
 
 
+def _api_status() -> dict:
+    """Status lengkap dari API + state.json — tanpa daemon/browser."""
+    from . import api, auth, config
+
+    state = api.load_state()
+    chat_id = state.get("active_chat_id")
+    status = {
+        "logged_in": auth.session_ok(),
+        "generating": False,
+        "active_chat": bool(chat_id),
+        "chat_id": chat_id,
+        "url": f"{config.BASE_URL}/c/{chat_id}" if chat_id else None,
+        "thinking_mode": api.get_thinking_mode(),
+        "model": api.get_model(),
+    }
+    if chat_id:
+        try:
+            status["generating"] = api.is_generating(chat_id)
+        except Exception:
+            pass  # probe best-effort; jangan gagalkan status keseluruhan
+    return status
+
+
 def cmd_status(args) -> None:
-    result = _run(_get_client().get_status)
-    _print_json(result)
+    _print_json(_api_status())
 
 
 def cmd_search(args) -> None:
@@ -270,7 +292,7 @@ def cmd_interactive(args) -> None:
             _print_json(_run(client.read))
             continue
         if line == "/status":
-            _print_json(_run(client.get_status))
+            _print_json(_api_status())
             continue
         if line.startswith("/mode "):
             print(_run(client.set_mode, line[6:].strip()))

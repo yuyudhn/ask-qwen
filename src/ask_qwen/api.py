@@ -242,3 +242,19 @@ def set_model(model_id: str) -> None:
 
 def get_model() -> str | None:
     return load_state().get("model")
+
+
+def is_generating(chat_id: str) -> bool:
+    """True bila chat punya generasi yang sedang berjalan.
+
+    Sinyal server: assistant message terakhir (by timestamp) ber-flag
+    done=False saat stream aktif, done=True saat selesai (verified live —
+    currentResponseIds justru tidak reliable: tetap terisi setelah selesai).
+    """
+    data = _request("GET", f"/api/v2/chats/{chat_id}")
+    nodes = (data.get("chat") or {}).get("history", {}).get("messages") or {}
+    assistants = [n for n in nodes.values() if isinstance(n, dict) and n.get("role") == "assistant"]
+    if not assistants:
+        return False
+    latest = max(assistants, key=lambda n: n.get("timestamp") or 0)
+    return latest.get("done") is False

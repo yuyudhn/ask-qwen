@@ -67,6 +67,25 @@ class TestSearchChats:
             api.search_chats("  ")
 
 
+class TestIsGenerating:
+    def _chat(self, done):
+        return {"chat": {"history": {"messages": {
+            "u1": {"role": "user", "content": "hi", "timestamp": 1},
+            "a1": {"role": "assistant", "content": "", "timestamp": 2, "done": done,
+                   "content_list": [{"phase": "answer", "content": "x"}]},
+        }}}}
+
+    def test_true_when_latest_assistant_not_done(self, monkeypatch):
+        monkeypatch.setattr(api, "_request", lambda m, p, payload=None: self._chat(False))
+        assert api.is_generating("c1") is True
+
+    def test_false_when_done_or_empty(self, monkeypatch):
+        monkeypatch.setattr(api, "_request", lambda m, p, payload=None: self._chat(True))
+        assert api.is_generating("c1") is False
+        monkeypatch.setattr(api, "_request", lambda m, p, payload=None: {"chat": {"history": {"messages": {}}}})
+        assert api.is_generating("c1") is False
+
+
 class TestParseChatId:
     def test_accepts_bare_id_and_url(self):
         cid = "aaaa1111-bbbb-2222-cccc-3333dddd4444"  # id sintetis, bukan data asli

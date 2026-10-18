@@ -127,7 +127,8 @@ class QwenWebClient:
             if "/c/" in url:
                 from . import api
 
-                api.set_active_chat(url.rsplit("/c/", 1)[-1])
+                cid = url.rsplit("/c/", 1)[-1].split("/")[0].split("?")[0]
+                api.set_active_chat(cid)
         except Exception:
             pass
 
