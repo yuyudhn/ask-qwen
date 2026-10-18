@@ -52,6 +52,15 @@ def _load_auth() -> dict | None:
         return None
 
 
+def _get_thinking_mode() -> str | None:
+    try:
+        from .api import get_thinking_mode
+
+        return get_thinking_mode()
+    except Exception:
+        return None
+
+
 def _playwright_cookies(raw: object) -> list[dict]:
     """Keep exported cookies compatible with Playwright's cookie schema."""
     if not isinstance(raw, list):
@@ -92,6 +101,7 @@ class PlaywrightBackend:
         self._ctx = None
         self._page = None
         self.has_active_chat = False
+        self.applied_mode: str | None = None  # thinking mode terakhir diterapkan
         self._operation_lock = threading.RLock()
 
     # -- lifecycle ---------------------------------------------------------
@@ -420,6 +430,7 @@ class PlaywrightBackend:
                 "logged_in": logged_in,
                 "generating": generating,
                 "active_chat": self.has_active_chat,
+                "thinking_mode": _get_thinking_mode(),
                 "url": page.url,
             }
 
@@ -573,31 +584,22 @@ class PlaywrightBackend:
                 messages = []
             return messages
 
-    def set_mode(self, mode: str) -> str:
-        """Ubah mode/thinking selector di area input.
+    def apply_thinking_mode(self, label: str) -> str:
+        """Terapkan thinking mode ke store frontend via localStorage + reload.
 
-        Mode terverifikasi dari DOM Qwen: auto, thinking, fast.
+        Mode dikirim per-request oleh UI (feature_config.thinking_mode) dan
+        tidak ada endpoint server-nya; store membaca 'qwen-thinking_mode' saat
+        boot. Reload URL aktif agar store ter-init ulang dengan mode baru.
         """
-        mode = (mode or "").strip().lower()
-        if mode not in config.MODES:
-            raise ValueError(
-                f"Mode tidak dikenal: {mode!r}. Pilihan: {', '.join(config.MODES)}."
-            )
         with self._operation_lock:
-            if not self._is_logged_in():
-                raise AuthExpired("Sesi login Qwen kadaluarsa.")
+            if self.applied_mode == label:
+                return f"Mode sudah {label}."
             page = self.page
-            page.locator(config.MODE_TRIGGER_SEL).click(timeout=10_000)
-            page.wait_for_selector(
-                config.MODE_ITEM_SEL, timeout=5_000, state="visible"
+            page.evaluate(
+                "m => localStorage.setItem('qwen-thinking_mode', m)", label
             )
-            items = page.locator(config.MODE_ITEM_SEL)
-            for index in range(items.count()):
-                item = items.nth(index)
-                if item.inner_text().strip().lower() == mode:
-                    item.click()
-                    return f"Mode diatur ke {mode.capitalize()}."
-            raise ValueError(
-                f"Mode '{mode}' tidak ditemukan di dropdown Qwen "
-                f"(opsi berubah? lihat config.MODE_*)."
-            )
+            url = page.url if "/c/" in (page.url or "") else config.BASE_URL
+            page.goto(url, timeout=config.NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+            page.wait_for_timeout(1500)  # boot app + init store dari localStorage
+            self.applied_mode = label
+            return f"Mode diatur ke {label}."

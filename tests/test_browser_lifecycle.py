@@ -51,6 +51,7 @@ class _HistoryPage:
 
     def __init__(self, items):
         self.items = items
+        self.generating = False
         for item in items:
             item.page = self
         self.navigated = []
@@ -58,6 +59,8 @@ class _HistoryPage:
     def locator(self, selector):
         if selector == config.CHAT_HISTORY_SEL:
             return _HistoryLocator(self.items)
+        if selector == config.STOP_BTN_SEL:
+            return _VisibleLocator(self.generating)
         raise AssertionError(f"unexpected selector: {selector}")
 
     def wait_for_function(self, *args, **kwargs):
@@ -77,6 +80,7 @@ class _SearchPage:
 
     def __init__(self):
         self.value = ""
+        self.generating = False
         self.items = []
         self.history_item = _HistoryItem("CAN Bus", "https://chat.qwen.ai/c/abc")
         self.history_item.page = self
@@ -86,6 +90,8 @@ class _SearchPage:
             return _SearchInput(self)
         if selector == config.CHAT_HISTORY_SEL:
             return _HistoryLocator([self.history_item])
+        if selector == config.STOP_BTN_SEL:
+            return _VisibleLocator(self.generating)
         raise AssertionError(f"unexpected selector: {selector}")
 
     def wait_for_selector(self, *args, **kwargs):
@@ -150,7 +156,8 @@ def test_stop_generation_reports_idle_state():
     assert backend.stop_generation() == "Tidak ada generasi aktif."
 
 
-def test_get_status_reports_browser_state():
+def test_get_status_reports_browser_state(monkeypatch):
+    monkeypatch.setattr(browser, "_get_thinking_mode", lambda: None)
     page = _StopPage(False)
     page.url = "https://chat.qwen.ai/c/abc"
     backend = browser.PlaywrightBackend()
@@ -165,6 +172,7 @@ def test_get_status_reports_browser_state():
         "logged_in": True,
         "generating": False,
         "active_chat": True,
+        "thinking_mode": None,
         "url": "https://chat.qwen.ai/c/abc",
     }
 
@@ -179,7 +187,7 @@ def test_search_chats_fills_input_and_returns_matching_items():
     result = backend.search_chats("CAN Bus")
 
     assert page.value == ""
-    assert result == [{"title": "CAN Bus", "url": "https://chat.qwen.ai/c/abc"}]
+    assert result == [{"title": "CAN Bus", "url": "https://chat.qwen.ai/c/abc", "id": "abc"}]
 
 
 class _HistoryLocator:
@@ -300,10 +308,22 @@ def test_list_chats_reads_history_links():
     backend._is_logged_in = lambda: True
 
     assert backend.list_chats() == [
-        {"title": "Ide project", "url": "https://chat.qwen.ai/c/abc"},
-        {"title": "Chat kedua", "url": "https://chat.qwen.ai/c/def"},
+        {"title": "Ide project", "url": "https://chat.qwen.ai/c/abc", "id": "abc"},
+        {"title": "Chat kedua", "url": "https://chat.qwen.ai/c/def", "id": "def"},
     ]
     assert page.url == "https://chat.qwen.ai/"  # kembali ke halaman semula
+
+
+def test_list_chats_refuses_while_generating():
+    page = _HistoryPage([_HistoryItem("x", "https://chat.qwen.ai/c/a")])
+    page.generating = True
+    backend = browser.PlaywrightBackend()
+    backend._page = page
+    backend._ctx = object()
+    backend._is_logged_in = lambda: True
+
+    with pytest.raises(RuntimeError, match="Generasi sedang berjalan"):
+        backend.list_chats()
 
 
 def test_read_chat_rejects_non_qwen_url():
@@ -400,55 +420,23 @@ def test_wait_response_done_raises_when_response_never_starts(monkeypatch):
         )
 
 
-class _ModeItem:
-    def __init__(self, text, page):
-        self.text = text
-        self.page = page
+class _StoragePage:
+    """Fake page untuk apply_thinking_mode: localStorage + goto recorder."""
 
-    def inner_text(self):
-        return self.text
+    def __init__(self, url="https://chat.qwen.ai/c/abc"):
+        self.url = url
+        self.storage = {}
+        self.gotos = []
 
-    def click(self, timeout=None):
-        self.page.selected = self.text
-        self.page.label = self.text
+    def evaluate(self, fn, arg):
+        assert "qwen-thinking_mode" in fn
+        self.storage["qwen-thinking_mode"] = arg
 
+    def goto(self, url, **kwargs):
+        self.gotos.append(url)
+        self.url = url
 
-class _ModeItemsLocator:
-    def __init__(self, items):
-        self.items = items
-
-    def count(self):
-        return len(self.items)
-
-    def nth(self, index):
-        return self.items[index]
-
-
-class _ClickableLocator:
-    def __init__(self, page):
-        self.page = page
-
-    def click(self, timeout=None):
-        self.page.trigger_clicked = True
-
-
-class _ModePage:
-    def __init__(self, modes):
-        self.items = [_ModeItem(m, self) for m in modes]
-        self.label = modes[0]
-        self.selected = None
-        self.trigger_clicked = False
-
-    def locator(self, selector):
-        if selector == config.MODE_TRIGGER_SEL:
-            return _ClickableLocator(self)
-        if selector == config.MODE_ITEM_SEL:
-            return _ModeItemsLocator(self.items)
-        if selector == config.MODE_LABEL_SEL:
-            return _RepeatingLocator([self.label])
-        raise AssertionError(f"unexpected selector: {selector}")
-
-    def wait_for_selector(self, *args, **kwargs):
+    def wait_for_timeout(self, ms):
         return None
 
 
@@ -460,22 +448,27 @@ def _mode_backend(page):
     return backend
 
 
-def test_set_mode_selects_matching_item():
-    page = _ModePage(["Auto", "Thinking", "Fast"])
+def test_apply_thinking_mode_sets_localstorage():
+    page = _StoragePage()
     backend = _mode_backend(page)
 
-    result = backend.set_mode("thinking")
+    result = backend.apply_thinking_mode("Thinking")
 
-    assert page.trigger_clicked
-    assert page.selected == "Thinking"
+    assert page.storage["qwen-thinking_mode"] == "Thinking"
+    assert backend.applied_mode == "Thinking"
+    assert page.gotos == ["https://chat.qwen.ai/c/abc"]  # reload URL aktif
     assert "Thinking" in result
 
 
-def test_set_mode_rejects_unknown_mode():
-    backend = _mode_backend(_ModePage(["Auto", "Thinking", "Fast"]))
+def test_apply_thinking_mode_idempotent():
+    page = _StoragePage()
+    backend = _mode_backend(page)
+    backend.apply_thinking_mode("Fast")
 
-    with pytest.raises(ValueError, match="thinking|fast|auto|turbo"):
-        backend.set_mode("turbo")
+    result = backend.apply_thinking_mode("Fast")
+
+    assert page.gotos == ["https://chat.qwen.ai/c/abc"]  # reload hanya sekali
+    assert "sudah" in result
 
 
 class _ChatPage:
@@ -509,3 +502,40 @@ def test_open_chat_navigates_and_marks_active():
 def test_open_chat_rejects_non_qwen_url():
     with pytest.raises(ValueError, match="chat.qwen.ai"):
         browser.PlaywrightBackend().open_chat("https://example.com/c/abc")
+
+
+def test_normalize_chat_ref_accepts_bare_chat_id():
+    assert browser.normalize_chat_ref("abc123XYZ-_") == "https://chat.qwen.ai/c/abc123XYZ-_"
+
+
+def test_normalize_chat_ref_passes_through_full_url():
+    url = "https://chat.qwen.ai/c/abc"
+    assert browser.normalize_chat_ref(url) == url
+
+
+def test_normalize_chat_ref_rejects_garbage():
+    with pytest.raises(ValueError, match="Referensi chat"):
+        browser.normalize_chat_ref("not a chat ref")
+
+
+def test_wait_response_done_streams_clean_line_deltas(monkeypatch):
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    page = _GenPage(
+        main=[
+            "old",
+            "oldUser\nThinking completed\npartial",
+            "oldUser\nThinking completed\nfull answer\nAuto\nI prefer this response",
+            "oldUser\nThinking completed\nfull answer\nAuto\nI prefer this response",
+        ],
+        stop=[False, True, True, False],
+    )
+    deltas = []
+
+    browser.PlaywrightBackend()._wait_response_done(
+        page, previous_text="old", on_delta=deltas.append
+    )
+
+    # noise UI (marker thinking, "Auto") disaring; baris dikirim utuh per \n;
+    # token "partial" tertulis ulang DOM (re-render) sebelum terkirim → hilang,
+    # itu trade-off streaming best-effort
+    assert deltas == ["User\n", "full answer\n"]

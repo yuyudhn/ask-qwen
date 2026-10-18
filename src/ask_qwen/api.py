@@ -198,3 +198,19 @@ def set_active_chat(chat_id: str | None) -> None:
     state = load_state()
     state["active_chat_id"] = chat_id
     save_state(state)
+
+
+# Thinking mode bersifat client-side: frontend menaruhnya di localStorage
+# 'qwen-thinking_mode' dan mengirimnya per-request (feature_config). Tidak ada
+# endpoint server — diterapkan ke store browser, bukan "via API".
+
+
+def set_thinking_mode(label: str) -> None:
+    """Simpan mode ('Auto'|'Thinking'|'Fast') untuk diterapkan ke browser."""
+    state = load_state()
+    state["thinking_mode"] = label
+    save_state(state)
+
+
+def get_thinking_mode() -> str | None:
+    return load_state().get("thinking_mode")

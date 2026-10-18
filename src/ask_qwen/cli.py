@@ -156,8 +156,21 @@ def cmd_open_chat(args) -> None:
 
 
 def cmd_set_mode(args) -> None:
-    result = _run(_get_client().set_mode, args.mode)
-    print(result)
+    from . import api, config
+
+    mode = (args.mode or "").strip().lower()
+    if mode not in config.MODES:
+        print(
+            f"Error: mode tidak dikenal: {mode!r}. Pilihan: {', '.join(config.MODES)}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    api.set_thinking_mode(mode.capitalize())
+    if daemon.is_running():
+        result = _run(_get_client().set_mode, mode)
+        print(result)
+    else:
+        print(f"Mode diatur ke {mode.capitalize()} (diterapkan saat ask berikutnya).")
 
 
 def cmd_stop(args) -> None:

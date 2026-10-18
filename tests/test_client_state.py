@@ -17,6 +17,7 @@ class FakeBackend:
         self.login_ok = True
         self.calls: list[str] = []
         self.active = False
+        self.applied_mode = None
 
     def ask(self, message: str, on_delta=None) -> str:
         self.calls.append(f"ask:{message}")
@@ -69,6 +70,11 @@ class FakeBackend:
     def set_mode(self, mode: str) -> str:
         self.calls.append(f"set_mode:{mode}")
         return f"Mode diatur ke {mode.capitalize()}."
+
+    def apply_thinking_mode(self, label: str) -> str:
+        self.calls.append(f"apply_thinking_mode:{label}")
+        self.applied_mode = label
+        return f"Mode diatur ke {label}."
 
     def stop_generation(self) -> str:
         self.calls.append("stop_generation")
@@ -192,12 +198,37 @@ class TestClientState:
         assert result[0]["role"] == "error"
         assert "ask-qwen login" in result[0]["content"]
 
-    def test_set_mode_delegates_to_backend(self):
+    def test_set_mode_persists_and_applies(self, monkeypatch):
+        from ask_qwen import api
+
+        seen = {}
+        monkeypatch.setattr(api, "set_thinking_mode", lambda m: seen.update(mode=m))
         b = FakeBackend()
         c = QwenWebClient(backend=b)
 
         assert c.set_mode("thinking") == "Mode diatur ke Thinking."
-        assert b.calls == ["set_mode:thinking"]
+        assert seen["mode"] == "Thinking"
+        assert b.calls == ["apply_thinking_mode:Thinking"]
+
+    def test_set_mode_rejects_unknown(self, monkeypatch):
+        from ask_qwen import api
+
+        monkeypatch.setattr(api, "set_thinking_mode", lambda m: None)
+        c = QwenWebClient(backend=FakeBackend())
+        try:
+            c.set_mode("turbo")
+            assert False, "unknown mode accepted"
+        except ValueError:
+            pass
+
+    def test_ask_applies_pending_thinking_mode(self, monkeypatch):
+        from ask_qwen import api
+
+        monkeypatch.setattr("ask_qwen.api.load_state", lambda: {"thinking_mode": "Thinking"})
+        b = FakeBackend()
+        c = QwenWebClient(backend=b)
+        c.ask("halo")
+        assert b.calls == ["new_chat", "apply_thinking_mode:Thinking", "ask:halo"]
 
     def test_stop_generation_delegates_to_backend(self):
         b = FakeBackend()

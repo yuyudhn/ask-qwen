@@ -67,10 +67,8 @@ POLL_INTERVAL_S = 0.2  # interval polling state tombol/teks
 # saat selesai Stop hilang dan Send kembali.
 STOP_BTN_SEL = 'button[aria-label="Stop"]'
 
-# Mode/thinking selector di area input (opsi terverifikasi: Auto, Thinking, Fast)
-MODE_TRIGGER_SEL = ".qwen-chat-v2-dropdown-menu-select"
-MODE_ITEM_SEL = ".qwen-chat-v2-dropdown-menu-item"
-MODE_LABEL_SEL = ".qwen-chat-v2-dropdown-menu-select-label"
+# Mode/thinking tidak lagi di-set lewat klik dropdown (frontend membaca
+# localStorage 'qwen-thinking_mode' saat boot — lihat browser.apply_thinking_mode).
 MODES = ("auto", "thinking", "fast")
 
 # Guard boundaries before large values reach the browser or response.

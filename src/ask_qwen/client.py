@@ -71,6 +71,10 @@ class QwenWebClient:
             else:
                 self.backend.new_chat()
             self.chat_active = True
+        # Mode berikutnya: state selalu menang (CLI adalah sumber kebenaran).
+        mode = api.load_state().get("thinking_mode")
+        if mode and self.backend.applied_mode != mode:
+            self.backend.apply_thinking_mode(mode)
         result = self.backend.ask(message, on_delta)
         # catat chat aktif agar perintah CLI lain (read via API) tahu chat id
         self._record_active_chat()
@@ -156,11 +160,20 @@ class QwenWebClient:
         return messages
 
     def set_mode(self, mode: str) -> str:
-        return self._run(self._set_mode_once, mode)
+        """Validasi + persist mode; daemon menerapkannya ke store browser."""
+        mode = (mode or "").strip().lower()
+        if mode not in config.MODES:
+            raise ValueError(
+                f"Mode tidak dikenal: {mode!r}. Pilihan: {', '.join(config.MODES)}."
+            )
+        from . import api
 
-    def _set_mode_once(self, mode: str) -> str:
+        api.set_thinking_mode(mode.capitalize())
+        return self._run(self._set_mode_once, mode.capitalize())
+
+    def _set_mode_once(self, label: str) -> str:
         try:
-            return self.backend.set_mode(mode)
+            return self.backend.apply_thinking_mode(label)
         except AuthExpired:
             return "Login Qwen kadaluarsa. Jalankan `ask-qwen login`."
 
