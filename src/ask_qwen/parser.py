@@ -16,6 +16,8 @@ Qwen kadang menampilkan A/B comparison UI:
 
 import re
 
+from . import config
+
 
 _FEEDBACK_NOISE = (
     "This feedback will help us evaluate and improve Qwen's performance.",
@@ -42,8 +44,11 @@ def _strip_comparison_ui(text: str) -> str:
 
 
 def _strip_noise_lines(text: str) -> str:
+    # Label mode di area input ikut ter-capture dalam <main> (Auto/Thinking/Fast);
+    # buang semua varian, bukan hanya "Auto".
+    mode_labels = {m.capitalize() for m in config.MODES} | {"Auto"}
     lines = [line.strip() for line in text.splitlines()]
-    kept = [line for line in lines if line and line not in ("Auto",)]
+    kept = [line for line in lines if line and line not in mode_labels]
     return "\n".join(kept)
 
 

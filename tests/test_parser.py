@@ -31,6 +31,12 @@ class TestExtractAnswer:
         result = extract_answer("jawaban\nAuto")
         assert result == "jawaban"
 
+    def test_all_mode_labels_stripped(self):
+        # label mode (Auto/Thinking/Fast) di area input ikut ter-capture di <main>
+        for mode in ("Auto", "Thinking", "Fast"):
+            assert extract_answer(f"jawaban\n{mode}") == "jawaban"
+            assert clean_message("assistant", f"jawaban\n{mode}") == "jawaban"
+
     def test_multiline_answer_preserved(self):
         text = "tanya\n\nThinking completed\n\nbaris 1\nbaris 2"
         assert extract_answer(text, user_message="tanya") == "baris 1\nbaris 2"
