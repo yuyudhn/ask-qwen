@@ -340,13 +340,15 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
         try:
             data = _request("GET", f"/api/v2/chats/{chat_id}")
             nodes = (data.get("chat") or {}).get("history", {}).get("messages") or {}
-            # Pohon server merantai USER message (parent user = user sebelumnya;
-            # response jadi anak dari user). Parent turn baru harus user
-            # terakhir — pakai response id (currentId) justru membuat cabang
-            # yang kehilangan konteks turn sebelumnya (verified live).
-            users = [(mid, n) for mid, n in nodes.items() if isinstance(n, dict) and n.get("role") == "user"]
-            if users:
-                parent = max(users, key=lambda t: t[1].get("timestamp") or 0)[0]
+            # Rantai percakapan asli (dari web UI): user -> assistant -> user,
+            # dengan parent setiap node = RESPONSE sebelumnya. Dua field wajib
+            # SAMA: parentId (camel) DAN parent_id (snake) = id response
+            # terakhir — parent_id None membuat konteks hilang (turn >2),
+            # childrenIds harus [] (diisi server; isi random mengacaukan).
+            assts = [(mid, n) for mid, n in nodes.items()
+                     if isinstance(n, dict) and n.get("role") == "assistant"]
+            if assts:
+                parent = max(assts, key=lambda t: t[1].get("timestamp") or 0)[0]
         except ApiError:
             chat_id = None  # chat terhapus/diarsipkan — mulai chat baru
     if not chat_id:
@@ -363,12 +365,12 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
         "chat_id": chat_id,
         "chat_mode": "normal",
         "model": model,
-        "parent_id": parent or None,
+        "parent_id": parent,
         "messages": [{
             "id": None,
             "fid": str(uuid.uuid4()),
             "parentId": parent or None,
-            "childrenIds": [str(uuid.uuid4())],
+            "childrenIds": [],
             "role": "user",
             "content": message,
             "user_action": "chat",
