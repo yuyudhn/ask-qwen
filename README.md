@@ -6,14 +6,14 @@ Designed as a **second-opinion tool for AI agents**: when your main AI gets stuc
 
 ## How It Works
 
-`ask-qwen` drives a real headless Chromium browser pointed at `chat.qwen.ai`. A background daemon keeps the browser alive between calls, so the first invocation takes ~10s (cold start) but subsequent ones connect instantly (~0.1s overhead). Conversations persist across calls until you explicitly start a new chat.
+Login and all read-path commands (`list`, `read`, `read-chat`, `open`, `search`, `new`) call the Qwen REST API directly with Bearer tokens — no browser, ~0.2s per call. Only `ask`/`chat`/`stop` drive a real headless Chromium browser, because Alibaba's WAF (RGV587) captcha-guards the chat-completions endpoint (see `dev-notes/qwen-api-research.md`, local only). A background daemon keeps that browser alive between calls, so the first `ask` takes ~10s (cold start) but subsequent ones connect instantly (~0.1s overhead). Conversations persist across calls until you explicitly start a new chat.
 
 ```text
-CLI (ask-qwen)
-  → daemon (Unix socket, auto-started)
-    → QwenWebClient (chat state, auth retry)
-      → PlaywrightBackend (headless Chromium)
-        → chat.qwen.ai
+read-path commands  ──► Qwen API (httpx, Bearer)
+ask/chat/stop       ──► daemon (Unix socket, auto-started)
+                         → QwenWebClient (chat state, auth retry)
+                           → PlaywrightBackend (headless Chromium)
+                             → chat.qwen.ai
 ```
 
 ## Install
