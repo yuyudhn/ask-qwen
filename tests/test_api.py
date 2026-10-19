@@ -259,6 +259,63 @@ class TestLifecycle:
         assert api.share_chat("c1") == "https://chat.qwen.ai/s/abc"
 
 
+class TestUploadFile:
+    def _fake_request(self, monkeypatch, tmp_path):
+        calls = {}
+        f = tmp_path / "notes.txt"
+        f.write_text("hello qwen")
+
+        def fake(method, path, payload=None):
+            if "getstsToken" in path:
+                return {
+                    "access_key_id": "AK", "access_key_secret": "SK",
+                    "security_token": "TOK", "bucketname": "bucket",
+                    "endpoint": "oss.example.com",
+                    "file_id": "fid-1", "file_path": "u/fid-1_notes.txt",
+                    "file_url": "https://cdn.example.com/u/fid-1_notes.txt",
+                }
+            if path.endswith("/files/parse"):
+                return {"file_id": "fid-1"}
+            if "parse/status" in path:
+                return [{"file_id": "fid-1", "status": "success"}]
+            raise AssertionError(path)
+
+        monkeypatch.setattr(api, "_request", fake)
+
+        class FakeResp:
+            status = 200
+
+            def read(self):
+                return b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        monkeypatch.setattr(api.urllib.request, "urlopen", lambda req, timeout: FakeResp())
+        monkeypatch.setattr(api, "_jwt_user_id", lambda: "uid-1")
+        return f
+
+    def test_upload_returns_web_shaped_item(self, monkeypatch, tmp_path):
+        f = self._fake_request(monkeypatch, tmp_path)
+        item = api.upload_file(f)
+        assert item["id"] == "fid-1"
+        assert item["url"].startswith("https://cdn.")
+        assert item["status"] == "uploaded"
+        assert item["collection_name"] == ""
+        assert item["file"]["id"] == "fid-1"
+        assert item["file"]["meta"]["parse_meta"]["parse_status"] == "success"
+        assert item["size"] == 10
+
+    def test_upload_missing_file(self, monkeypatch, tmp_path):
+        import pytest
+
+        with pytest.raises(api.ApiError):
+            api.upload_file(tmp_path / "nope.txt")
+
+
 class TestIsGenerating:
     def _chat(self, done):
         return {"chat": {"history": {"messages": {

@@ -5,8 +5,11 @@ Hanya endpoint tanpa WAF-guard — chat/completions tetap lewat browser
 lewat ~/.ask-qwen/state.json.
 """
 
+import base64
 import json
+import pathlib
 import re
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -209,6 +212,123 @@ def share_chat(chat_id: str) -> str:
     raise ApiError(f"respons share tidak dikenal: {data!r}")
 
 
+# -- file upload (STS -> OSS PUT -> parse -> item) -----------------------------
+#
+# Alur persis web fe 0.3.19: POST /api/v2/files/getstsToken -> kredensial STS +
+# file_id + file_path; PUT bytes ke OSS ({bucket}.{endpoint}/{file_path},
+# signature OSS V1 dengan x-oss-security-token di CanonicalizedHeaders — wajib
+# untuk STS); POST /files/parse + poll /files/parse/status sampai success.
+# Item files[] memakai bentuk persis serializer web (verified live 2026-10-19).
+
+
+def _oss_sign(method: str, content_type: str, date: str, resource: str,
+              secret: str, security_token: str) -> str:
+    import hashlib
+    import hmac
+
+    # STS: x-oss-security-token WAJIB masuk CanonicalizedOSSHeaders (docs OSS).
+    string_to_sign = (
+        f"{method}\n\n{content_type}\n{date}\n"
+        f"x-oss-security-token:{security_token}\n{resource}"
+    )
+    return base64.b64encode(
+        hmac.new(secret.encode(), string_to_sign.encode(), hashlib.sha1).digest()
+    ).decode()
+
+
+def _wait_parsed(file_ids: list, timeout_s: float = 90.0, interval_s: float = 2.0) -> None:
+    """Poll /files/parse/status sampai semua file success (atau timeout)."""
+    deadline = time.time() + timeout_s
+    pending = set(file_ids)
+    while pending and time.time() < deadline:
+        time.sleep(interval_s)
+        data = _request("POST", "/api/v2/files/parse/status", {"file_id_list": sorted(pending)})
+        for entry in data if isinstance(data, list) else []:
+            status = entry.get("status")
+            if status == "success":
+                pending.discard(entry.get("file_id"))
+            elif status == "failed":
+                raise ApiError(f"parse file gagal: {entry.get('error_msg') or entry.get('file_id')}")
+
+
+def _jwt_user_id() -> str | None:
+    tok = (auth.load_auth() or {}).get("access_token") or ""
+    try:
+        p = tok.split(".")[1]
+        p += "=" * (-len(p) % 4)
+        return json.loads(base64.urlsafe_b64decode(p)).get("id")
+    except Exception:
+        return None
+
+
+def upload_file(path) -> dict:
+    """Upload file ke OSS Qwen; kembalikan item siap masuk message files[].
+
+    PUT utuh (bukan multipart) — cukup sampai puluhan MB; batas 100 MB.
+    """
+    import email.utils
+    import mimetypes
+
+    path = pathlib.Path(path)
+    if not path.is_file():
+        raise ApiError(f"file tidak ditemukan: {path}")
+    content = path.read_bytes()
+    size = len(content)
+    if size > 100 * 1024 * 1024:
+        raise ApiError("file melebihi batas 100 MB")
+    name = path.name
+    mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+
+    td = _request("POST", "/api/v2/files/getstsToken", {
+        "filename": name, "filetype": mime, "filesize": str(size),
+    })
+    file_id, obj_key, bucket = td["file_id"], td["file_path"], td["bucketname"]
+    endpoint = td.get("endpoint") or ""
+    host = f"{bucket}.{endpoint}" if not endpoint.startswith("http") else endpoint.replace("https://", f"{bucket}.")
+    date = email.utils.formatdate(usegmt=True)
+    resource = f"/{bucket}/{obj_key}"
+    req = urllib.request.Request(
+        f"https://{host}/{obj_key}", data=content,
+        headers={
+            "Date": date,
+            "Content-Type": mime,
+            "Authorization": "OSS {}:{}".format(
+                td["access_key_id"],
+                _oss_sign("PUT", mime, date, resource, td["access_key_secret"], td["security_token"]),
+            ),
+            "x-oss-security-token": td["security_token"],
+        },
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            if resp.status not in (200, 201):
+                raise ApiError(f"OSS upload HTTP {resp.status}")
+    except urllib.error.HTTPError as e:
+        raise ApiError(f"OSS upload gagal: HTTP {e.code}: {e.read()[:200]!r}") from e
+
+    _request("POST", "/api/v2/files/parse", {"file_id": file_id})
+    _wait_parsed([file_id])
+
+    # Item persis serializer web (fe 0.3.19): wrapper + nested file object.
+    now_ms = int(time.time() * 1000)
+    zp = {
+        "created_at": now_ms, "data": {}, "filename": name, "hash": None,
+        "id": file_id, "user_id": _jwt_user_id(),
+        "meta": {"name": name, "size": size, "content_type": mime,
+                 "parse_meta": {"parse_status": "success"}},
+        "update_at": now_ms, "lastModified": now_ms, "name": name,
+        "webkitRelativePath": "", "size": size, "type": mime,
+    }
+    return {
+        "type": "file", "file": zp, "id": file_id, "url": td.get("file_url") or "",
+        "name": name, "collection_name": "", "status": "uploaded", "progress": 100,
+        "greenNet": "success", "size": size, "error": "",
+        "itemId": str(uuid.uuid4()), "file_type": mime,
+        "showType": "file", "file_class": "document", "uploadTaskId": str(uuid.uuid4()),
+    }
+
+
 # -- transcript -------------------------------------------------------------
 
 
@@ -392,7 +512,8 @@ def _feature_config(state: dict) -> tuple[str, dict]:
 
 
 def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase=None,
-               chat_mode: str = "normal", idle_timeout_s: int | None = None) -> dict:
+               chat_mode: str = "normal", idle_timeout_s: int | None = None,
+               files: list | None = None) -> dict:
     """Kirim pesan ke Qwen dan stream jawabannya — murni HTTP, tanpa browser.
 
     - on_delta(chunk): callback teks answer-phase saat streaming.
@@ -469,7 +590,7 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
             "role": "user",
             "content": message,
             "user_action": "chat",
-            "files": [],
+            "files": list(files or []),
             "timestamp": ts,
             "models": [model],
             "model": "",

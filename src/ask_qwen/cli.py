@@ -73,6 +73,10 @@ def _resolve_message(parts: list) -> str:
     return " ".join(data if p == "-" else p for p in parts)
 
 
+def _upload_files(paths: list) -> list:
+    return [api.upload_file(p) for p in paths]
+
+
 def cmd_ask(args) -> None:
     _ask_impl(args, chat_mode="normal")
 
@@ -84,13 +88,14 @@ def cmd_research(args) -> None:
 
 def _ask_impl(args, chat_mode: str = "normal", idle_timeout_s: int | None = None) -> None:
     message = _run(_resolve_message, list(args.message))
+    files = _run(_upload_files, args.file) if getattr(args, "file", None) else None
     # Retry bounded bila server kena high demand (umum di jam sibuk, terutama
     # deep research yang berat). Percobaan gagal tidak menulis node baru, jadi
     # retry aman terhadap rantai percakapan.
     attempts = 3
     for i in range(1, attempts + 1):
         try:
-            _ask_once(args, message, chat_mode, idle_timeout_s)
+            _ask_once(args, message, chat_mode, idle_timeout_s, files)
             return
         except (api.ApiError, auth.AuthError, ValueError) as e:
             transient = "high demand" in str(e).lower() or "quota" in str(e).lower()
@@ -101,7 +106,8 @@ def _ask_impl(args, chat_mode: str = "normal", idle_timeout_s: int | None = None
             time.sleep(15)
 
 
-def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None) -> None:
+def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None,
+              files: list | None = None) -> None:
     if sys.stdout.isatty() and not args.json:
         # TTY: jawaban mengalir langsung ke stdout; --verbose menampilkan
         # fase think/code_interpreter ke stderr. Piped: tetap satu jawaban
@@ -136,7 +142,8 @@ def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None) ->
         on_phase = _verbose if args.verbose else None
         try:
             result = api.stream_ask(message, on_delta=_live, on_phase=on_phase,
-                                    chat_mode=chat_mode, idle_timeout_s=idle_timeout_s)
+                                    chat_mode=chat_mode, idle_timeout_s=idle_timeout_s,
+                                    files=files)
         except (api.ApiError, auth.AuthError, ValueError) as e:
             print(f"Error: {e}", file=sys.stderr)
             raise SystemExit(1)
@@ -149,7 +156,7 @@ def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None) ->
     else:
         with _Spinner():
             result = _run(api.stream_ask, message, chat_mode=chat_mode,
-                          idle_timeout_s=idle_timeout_s)
+                          idle_timeout_s=idle_timeout_s, files=files)
         if args.json:
             _print_json(result)
         else:
@@ -359,12 +366,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("message", nargs="+", help="Message to send; use '-' as a word to insert piped stdin")
     p.add_argument("--json", action="store_true", help="Machine-readable output (answer, chat_id, usage, model)")
     p.add_argument("-v", "--verbose", action="store_true", help="Show thinking/code_interpreter phases on stderr (TTY)")
+    p.add_argument("--file", action="append", metavar="PATH", help="Attach a file (repeatable); docs, images, logs")
     p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("research", help="Deep-research a question (much slower, searches the web)")
     p.add_argument("message", nargs="+", help="Research question; '-' inserts piped stdin")
     p.add_argument("--json", action="store_true", help="Machine-readable output")
     p.add_argument("-v", "--verbose", action="store_true", help="Show research/thinking phases on stderr")
+    p.add_argument("--file", action="append", metavar="PATH", help="Attach a file (repeatable)")
     p.set_defaults(func=cmd_research)
 
     p = sub.add_parser("read", help="Read the active chat transcript")

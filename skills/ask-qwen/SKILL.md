@@ -91,7 +91,17 @@ git diff | ask-qwen ask "review this diff" -
 cat error.log | ask-qwen ask "what's causing this?" -
 ```
 
-Use `-` as a word in the message to insert piped stdin. Best for code, logs, and configs — anything you can `cat`. Binary documents (PDF/images) would need file attachment instead. Never pipe secrets you wouldn't want in the transcript.
+Use `-` as a word in the message to insert piped stdin. Best for code, logs, and configs — anything you can `cat`. Never pipe secrets you wouldn't want in the transcript.
+
+### Attach Documents and Images
+
+```bash
+ask-qwen ask "summarize the findings" --file report.pdf
+ask-qwen ask "what does this screenshot show?" --file error.png
+ask-qwen ask "review the config" --file app.conf --file nginx.conf
+```
+
+For PDFs, Word docs, images, spreadsheets — anything you can't paste as text. The file uploads to Qwen and is parsed server-side before the model reads it (adds a few seconds). Combine with pipes freely: attach the binary, pipe the context.
 
 ### Machine-Readable Output
 
