@@ -109,10 +109,11 @@ def _ask_impl(args, chat_mode: str = "normal", idle_timeout_s: int | None = None
 def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None,
               files: list | None = None) -> None:
     if sys.stdout.isatty() and not args.json:
-        # TTY: jawaban mengalir langsung ke stdout; --verbose menampilkan
-        # fase think/code_interpreter ke stderr. Piped: tetap satu jawaban
-        # bersih di akhir agar aman untuk konsumsi agen.
-        first = {"answer": True, "phase": None}
+        # TTY: proses berpikir mengalir redup ke stderr; jawaban mengalir
+        # bersih ke stdout. Piped: tetap satu jawaban bersih di akhir agar
+        # aman untuk konsumsi agen.
+        first = {"answer": True}
+        state = {"thinking": False, "phase": None}
         spinner = _Spinner()
         spinner.__enter__()
         stopped = {"v": False}
@@ -120,34 +121,47 @@ def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None,
         def _stop_spinner() -> None:
             if not stopped["v"]:
                 stopped["v"] = True
-                if first["phase"] is not None:
-                    sys.stderr.write("\n")  # jaga teks fase dari clear-line
+                if state["thinking"]:
+                    sys.stderr.write("\n")  # jaga teks thinking dari clear-line
                 spinner.__exit__()
 
+        def _end_thinking() -> None:
+            if state["thinking"]:
+                state["thinking"] = False
+                sys.stderr.write("\033[0m\n")  # matikan dim
+                sys.stderr.flush()
+
         def _live(chunk: str) -> None:
+            # jawaban: stdout bersih, streaming live
+            _end_thinking()
             _stop_spinner()
             if first["answer"]:
                 first["answer"] = False
                 print()
             print(chunk, end="", flush=True)
 
-        def _verbose(phase: str, chunk: str) -> None:
+        def _think(phase: str, chunk: str) -> None:
+            # proses berpikir: stderr redup — jelas berbeda dari jawaban
             _stop_spinner()
-            if first["phase"] != phase:
-                first["phase"] = phase
-                sys.stderr.write(f"\n[{phase}] ")
+            if not state["thinking"]:
+                state["thinking"] = True
+                sys.stderr.write("\033[2m")  # dim on
+            if state["phase"] != phase:
+                state["phase"] = phase
+                marker = "💭" if phase == "think" else f"· {phase}"
+                sys.stderr.write(f"\n{marker} ")
             sys.stderr.write(chunk)
             sys.stderr.flush()
 
-        on_phase = _verbose if args.verbose else None
         try:
-            result = api.stream_ask(message, on_delta=_live, on_phase=on_phase,
+            result = api.stream_ask(message, on_delta=_live, on_phase=_think,
                                     chat_mode=chat_mode, idle_timeout_s=idle_timeout_s,
                                     files=files)
         except (api.ApiError, auth.AuthError, ValueError) as e:
             print(f"Error: {e}", file=sys.stderr)
             raise SystemExit(1)
         finally:
+            _end_thinking()
             _stop_spinner()
         if not first["answer"]:  # sudah streaming — cukup newline penutup
             print()
@@ -365,14 +379,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("ask", help="Send a message and get the answer")
     p.add_argument("message", nargs="+", help="Message to send; use '-' as a word to insert piped stdin")
     p.add_argument("--json", action="store_true", help="Machine-readable output (answer, chat_id, usage, model)")
-    p.add_argument("-v", "--verbose", action="store_true", help="Show thinking/code_interpreter phases on stderr (TTY)")
     p.add_argument("--file", action="append", metavar="PATH", help="Attach a file (repeatable); docs, images, logs")
     p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("research", help="Deep-research a question (much slower, searches the web)")
     p.add_argument("message", nargs="+", help="Research question; '-' inserts piped stdin")
     p.add_argument("--json", action="store_true", help="Machine-readable output")
-    p.add_argument("-v", "--verbose", action="store_true", help="Show research/thinking phases on stderr")
     p.add_argument("--file", action="append", metavar="PATH", help="Attach a file (repeatable)")
     p.set_defaults(func=cmd_research)
 
