@@ -154,7 +154,8 @@ def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None,
             sys.stderr.flush()
 
         try:
-            result = api.stream_ask(message, on_delta=_live, on_phase=_think,
+            result = api.stream_ask(message, on_delta=_live,
+                                    on_phase=None if getattr(args, "quiet", False) else _think,
                                     chat_mode=chat_mode, idle_timeout_s=idle_timeout_s,
                                     files=files)
         except (api.ApiError, auth.AuthError, ValueError) as e:
@@ -370,22 +371,32 @@ def cmd_login(args) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    import importlib.metadata
+
+    try:
+        version = importlib.metadata.version("ask-qwen")
+    except importlib.metadata.PackageNotFoundError:
+        version = "0.0.0-dev"
+
     parser = argparse.ArgumentParser(
         prog="ask-qwen",
         description="Chat with Qwen (chat.qwen.ai) via its REST API — no browser",
     )
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {version}")
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("ask", help="Send a message and get the answer")
     p.add_argument("message", nargs="+", help="Message to send; use '-' as a word to insert piped stdin")
     p.add_argument("--json", action="store_true", help="Machine-readable output (answer, chat_id, usage, model)")
     p.add_argument("--file", action="append", metavar="PATH", help="Attach a file (repeatable); docs, images, logs")
+    p.add_argument("--quiet", action="store_true", help="Suppress thinking display on TTY (answer only)")
     p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("research", help="Deep-research a question (much slower, searches the web)")
     p.add_argument("message", nargs="+", help="Research question; '-' inserts piped stdin")
     p.add_argument("--json", action="store_true", help="Machine-readable output")
     p.add_argument("--file", action="append", metavar="PATH", help="Attach a file (repeatable)")
+    p.add_argument("--quiet", action="store_true", help="Suppress thinking display on TTY (answer only)")
     p.set_defaults(func=cmd_research)
 
     p = sub.add_parser("read", help="Read the active chat transcript")
