@@ -52,6 +52,11 @@ ask-qwen read-chat <url|id>                         # any chat's transcript
 ask-qwen open <url|id>                              # make an old chat active
 ask-qwen search "kubernetes"                        # search chats
 
+ask-qwen pin <id>            # pin a chat (unpin to undo)
+ask-qwen clone <id>          # duplicate a chat
+ask-qwen share <id>          # print a public share link
+ask-qwen delete <id> [more…] # delete permanently (asks; --yes when piped)
+
 ask-qwen mode thinking                              # thinking mode: auto | thinking | fast
 ask-qwen model                                      # list models (* = active)
 ask-qwen model qwen3.6-plus                         # set model for future asks
@@ -85,6 +90,10 @@ ask-qwen ask "What if I add a mutex around the send? Would that deadlock?"
 | `stop` | Stop active generation (works from another shell). |
 | `status` | Show login, active chat, and generation state. |
 | `search <query>` | Search chats by text. |
+| `pin <url\|id>` / `unpin <url\|id>` | Pin or unpin a chat (idempotent). |
+| `clone <url\|id>` | Duplicate a chat; prints the new chat URL. |
+| `share <url\|id>` | Create a public share link. |
+| `delete <url\|id> […]` | Delete chats permanently (confirms on TTY; `--yes` when piped). |
 | `login` | Sign in via Qwen API. |
 
 ## Limitations & Risks

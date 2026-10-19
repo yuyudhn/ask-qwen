@@ -200,6 +200,52 @@ def cmd_search(args) -> None:
     _print_json(_run(api.search_chats, args.query))
 
 
+def _confirm_delete(targets: list) -> bool:
+    if sys.stdin.isatty():
+        reply = input(f"Hapus {len(targets)} chat permanen? [y/N] ").strip().lower()
+        return reply == "y"
+    return False  # non-TTY wajib --yes
+
+
+def cmd_delete(args) -> None:
+    ids = [_run(api.parse_chat_id, ref) for ref in args.refs]
+    if not args.yes and not _confirm_delete(ids):
+        print("Dibatalkan.")
+        return
+    if len(ids) == 1:
+        _run(api.delete_chat, ids[0])
+    else:
+        _run(api.delete_chats, ids)
+    state = api.load_state()
+    if state.get("active_chat_id") in ids:
+        api.set_active_chat(None)  # chat aktif terhapus — reset state
+    print(f"Terhapus: {len(ids)} chat.")
+
+
+def cmd_pin(args) -> None:
+    chat_id = _run(api.parse_chat_id, args.url)
+    _run(api.set_pinned, chat_id, True)
+    print(f"Chat dipin: {chat_id}")
+
+
+def cmd_unpin(args) -> None:
+    chat_id = _run(api.parse_chat_id, args.url)
+    _run(api.set_pinned, chat_id, False)
+    print(f"Chat diunpin: {chat_id}")
+
+
+def cmd_clone(args) -> None:
+    chat_id = _run(api.parse_chat_id, args.url)
+    new_id = _run(api.clone_chat, chat_id)
+    print(f"Chat dikloning: {config.BASE_URL}/c/{new_id}")
+
+
+def cmd_share(args) -> None:
+    chat_id = _run(api.parse_chat_id, args.url)
+    url = _run(api.share_chat, chat_id)
+    print(url)
+
+
 def cmd_login(args) -> None:
     import getpass
 
@@ -261,6 +307,27 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("search", help="Search chats by text")
     p.add_argument("query", help="Search query")
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("delete", help="Delete chats permanently (1+ id/URL)")
+    p.add_argument("refs", nargs="+", help="Chat id(s) or URL(s)")
+    p.add_argument("--yes", action="store_true", help="Skip confirmation (required when piped)")
+    p.set_defaults(func=cmd_delete)
+
+    p = sub.add_parser("pin", help="Pin a chat")
+    p.add_argument("url", help="Chat id or URL")
+    p.set_defaults(func=cmd_pin)
+
+    p = sub.add_parser("unpin", help="Unpin a chat")
+    p.add_argument("url", help="Chat id or URL")
+    p.set_defaults(func=cmd_unpin)
+
+    p = sub.add_parser("clone", help="Duplicate a chat")
+    p.add_argument("url", help="Chat id or URL")
+    p.set_defaults(func=cmd_clone)
+
+    p = sub.add_parser("share", help="Create a public share link for a chat")
+    p.add_argument("url", help="Chat id or URL")
+    p.set_defaults(func=cmd_share)
 
     p = sub.add_parser("login", help="Sign in via Qwen API")
     p.add_argument("--email", help="Qwen account email")

@@ -143,6 +143,51 @@ class TestStreamAsk:
             api.stream_ask("toolong")
 
 
+class TestLifecycle:
+    def test_delete_single_and_batch(self, monkeypatch):
+        calls = []
+
+        def fake(method, path, payload=None):
+            calls.append((method, path, payload))
+            return {}
+
+        monkeypatch.setattr(api, "_request", fake)
+        api.delete_chat("c1")
+        api.delete_chats(["c1", "c2"])
+        assert calls == [
+            ("DELETE", "/api/v2/chats/c1", None),
+            ("POST", "/api/v2/chats/batch_delete", {"ids": ["c1", "c2"]}),
+        ]
+
+    def test_set_pinned_idempotent(self, monkeypatch):
+        calls = []
+        state = {"pinned": False}
+
+        def fake(method, path, payload=None):
+            calls.append(path)
+            if method == "GET":
+                return dict(state)
+            state["pinned"] = not state["pinned"]
+            return {}
+
+        monkeypatch.setattr(api, "_request", fake)
+        assert api.set_pinned("c1", True) is True
+        assert api.set_pinned("c1", True) is True  # sudah pinned — tak toggle lagi
+        assert calls.count("/api/v2/chats/c1/pin") == 1
+        api.set_pinned("c1", False)
+        assert calls.count("/api/v2/chats/c1/pin") == 2
+
+    def test_clone_and_share(self, monkeypatch):
+        def fake(method, path, payload=None):
+            if path.endswith("/clone"):
+                return {"id": "new-chat"}
+            return {"url": "https://chat.qwen.ai/s/abc"}
+
+        monkeypatch.setattr(api, "_request", fake)
+        assert api.clone_chat("c1") == "new-chat"
+        assert api.share_chat("c1") == "https://chat.qwen.ai/s/abc"
+
+
 class TestIsGenerating:
     def _chat(self, done):
         return {"chat": {"history": {"messages": {

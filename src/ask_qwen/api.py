@@ -120,6 +120,48 @@ def chat_exists(chat_id: str) -> bool:
         return False
 
 
+# -- chat lifecycle -----------------------------------------------------------
+
+
+def delete_chat(chat_id: str) -> None:
+    """Hapus chat (DELETE /api/v2/chats/{id}). Merusak — CLI minta konfirmasi."""
+    _request("DELETE", f"/api/v2/chats/{chat_id}")
+
+
+def delete_chats(chat_ids: list) -> None:
+    """Hapus banyak chat sekaligus (batch_delete)."""
+    _request("POST", "/api/v2/chats/batch_delete", {"ids": list(chat_ids)})
+
+
+def _is_pinned(chat_id: str) -> bool:
+    data = _request("GET", f"/api/v2/chats/{chat_id}")
+    return bool(data.get("pinned"))
+
+
+def set_pinned(chat_id: str, pinned: bool) -> bool:
+    """Set pin secara idempotent (endpoint asli toggle — cek dulu state-nya)."""
+    if _is_pinned(chat_id) != pinned:
+        _request("POST", f"/api/v2/chats/{chat_id}/pin")
+    return pinned
+
+
+def clone_chat(chat_id: str) -> str:
+    """Duplikat chat; kembalikan id chat baru."""
+    data = _request("POST", f"/api/v2/chats/{chat_id}/clone")
+    return data["id"] if isinstance(data, dict) else str(data)
+
+
+def share_chat(chat_id: str) -> str:
+    """Bagikan chat publik; kembalikan URL share."""
+    data = _request("POST", f"/api/v2/chats/{chat_id}/share")
+    if isinstance(data, dict):
+        for key in ("url", "share_url", "share_id", "id"):
+            if data.get(key):
+                val = data[key]
+                return val if str(val).startswith("http") else f"{config.BASE_URL}/share/chat/{val}"
+    raise ApiError(f"respons share tidak dikenal: {data!r}")
+
+
 # -- transcript -------------------------------------------------------------
 
 
