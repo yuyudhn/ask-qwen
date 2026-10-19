@@ -76,6 +76,41 @@ ask-qwen mode auto        # let Qwen decide
 
 Use `thinking` for complex reasoning tasks. Use `fast` when you just need a quick factual answer.
 
+### Machine-Readable Output
+
+```bash
+ask-qwen ask --json "your question"   # {answer, chat_id, usage, model}
+```
+
+`read`, `list`, `search`, and `status` already return JSON by default. Use `--json` when a script or another agent consumes the answer.
+
+### Manage Past Consultations
+
+```bash
+ask-qwen list -n 10              # recent chats (id, title, timestamps)
+ask-qwen search "race condition" # find an old consultation by text
+ask-qwen read-chat <id>          # any chat's transcript as JSON
+ask-qwen share <id>              # public share URL for a consultation
+ask-qwen clone <id>              # duplicate before branching an experiment
+ask-qwen delete <id> --yes       # permanent (skip --yes only on a TTY)
+```
+
+Chat ids from `list` feed directly into `open`/`read-chat`/`share`/`clone`/`delete`.
+
+### Organize Consultations into Projects
+
+When a topic spans many conversations (a debugging saga, a design exploration), group them natively:
+
+```bash
+ask-qwen project new "Postgres migration"   # create
+ask-qwen project open <id>                  # activate
+ask-qwen ask "..."                          # new chats land inside the project
+ask-qwen project chats <id>                 # list consultations in it
+ask-qwen project close                      # detach when done
+```
+
+While a project is active, every fresh conversation is created inside it; continuing an existing chat is unaffected. Move an old chat in with `ask-qwen project add <chat-id>`.
+
 ## Consultation Patterns
 
 ### Pattern 1: Brainstorm Alternatives
@@ -131,6 +166,8 @@ ask-qwen ask "Explain the difference between PBKDF2, bcrypt, scrypt, and Argon2 
 - **Use multi-turn for complex problems** — start broad, then narrow down with follow-ups.
 - **Check `ask-qwen status`** before a critical consultation to confirm the session is active.
 - **Parse stdout** — the answer is plain text on stdout. JSON output (from `read`, `list`, `status`) goes to stdout too.
+- **Long engagements: use a project** — activate one with `ask-qwen project open` so every consultation on a topic stays grouped and retrievable later via `project chats`.
+- **Retrieve, don't redo** — before re-asking, `ask-qwen search` the topic; Qwen may already have answered it in an earlier consultation.
 - **Errors go to stderr** — the spinner and error messages don't pollute stdout.
 
 ## Limitations
