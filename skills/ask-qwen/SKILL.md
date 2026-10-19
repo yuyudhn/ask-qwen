@@ -192,7 +192,7 @@ ask-qwen ask "Explain the difference between PBKDF2, bcrypt, scrypt, and Argon2 
 - **Be specific in your prompts** — include code snippets, error messages, constraints. Qwen can't see your files.
 - **Use multi-turn for complex problems** — start broad, then narrow down with follow-ups.
 - **Check `ask-qwen status`** before a critical consultation to confirm the session is active.
-- **Parse stdout** — the answer is plain text on stdout. JSON output (from `read`, `list`, `status`) goes to stdout too.
+- **Parse stdout** — the answer is plain text on stdout, nothing else (thinking is suppressed by default; `--think` shows it for humans on TTY). JSON output (from `read`, `list`, `status`) goes to stdout too.
 - **Long engagements: use a project** — activate one with `ask-qwen project open` so every consultation on a topic stays grouped and retrievable later via `project chats`.
 - **Retrieve, don't redo** — before re-asking, `ask-qwen search` the topic; Qwen may already have answered it in an earlier consultation.
 - **Errors go to stderr** — the spinner and error messages don't pollute stdout.

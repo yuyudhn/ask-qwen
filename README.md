@@ -42,8 +42,8 @@ Signs in via `auth.qwen.ai`. The password is SHA-256 hashed client-side before i
 ```bash
 ask-qwen ask "Explain the CAP theorem in 2 sentences"
 ask-qwen ask --json "Explain the CAP theorem"   # machine-readable: answer, chat_id, usage, model
-ask-qwen ask "..."                                # TTY: thinking streams dimmed to stderr; answer streams clean on stdout
-ask-qwen ask --quiet "..."                        # suppress thinking, answer only
+ask-qwen ask "..."                                # answer only — same contract as piped output
+ask-qwen ask --think "..."                        # TTY: also stream Qwen's reasoning (dimmed, stderr)
 git diff | ask-qwen ask "review this" -          # pipe text via stdin ('-' marker)
 ask-qwen ask "summarize this" --file report.pdf     # attach docs, images, logs
 ask-qwen research "compare Postgres 18 vs MariaDB 12"   # deep research (slow, cited)
