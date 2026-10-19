@@ -156,7 +156,7 @@ def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None,
 
         try:
             result = api.stream_ask(message, on_delta=_live,
-                                    on_phase=_think if getattr(args, "think", False) else None,
+                                    on_phase=_think if getattr(args, "thinking", False) else None,
                                     chat_mode=chat_mode, idle_timeout_s=idle_timeout_s,
                                     files=files)
         except (api.ApiError, auth.AuthError, ValueError) as e:
@@ -390,14 +390,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("message", nargs="+", help="Message to send; use '-' as a word to insert piped stdin")
     p.add_argument("--json", action="store_true", help="Machine-readable output (answer, chat_id, usage, model)")
     p.add_argument("--file", action="append", metavar="PATH", help="Attach a file (repeatable); docs, images, logs")
-    p.add_argument("--think", action="store_true", help="Show Qwen's reasoning stream on stderr (TTY)")
+    p.add_argument("--thinking", action="store_true", help="Show Qwen's reasoning stream on stderr (TTY)")
     p.set_defaults(func=cmd_ask)
 
     p = sub.add_parser("research", help="Deep-research a question (much slower, searches the web)")
     p.add_argument("message", nargs="+", help="Research question; '-' inserts piped stdin")
     p.add_argument("--json", action="store_true", help="Machine-readable output")
     p.add_argument("--file", action="append", metavar="PATH", help="Attach a file (repeatable)")
-    p.add_argument("--think", action="store_true", help="Show reasoning/research phases on stderr (TTY)")
+    p.add_argument("--thinking", action="store_true", help="Show reasoning/research phases on stderr (TTY)")
     p.set_defaults(func=cmd_research)
 
     p = sub.add_parser("read", help="Read the active chat transcript")
