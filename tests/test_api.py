@@ -142,6 +142,43 @@ class TestStreamAsk:
         with pytest.raises(ValueError):
             api.stream_ask("toolong")
 
+    def test_chat_mode_research_in_payload(self, monkeypatch):
+        self._fake_state(monkeypatch)
+        monkeypatch.setattr(api.auth, "access_token", lambda: "tok")
+        seen = {}
+
+        def fake_request(method, path, payload=None):
+            if "chats/new" in path:
+                return {"id": "chat-new"}
+            return {}
+
+        monkeypatch.setattr(api, "_request", fake_request)
+
+        class FakeResp:
+            status = 200
+
+            def readline(self):
+                return b""
+
+        class FakeConn:
+            def __init__(self, *a, **k):
+                seen["timeout"] = k.get("timeout")
+
+            def request(self, *a, **k):
+                body = json.loads(k["body"])
+                seen["chat_mode"] = body["chat_mode"]
+
+            def getresponse(self):
+                return FakeResp()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("http.client.HTTPSConnection", FakeConn)
+        api.stream_ask("riset", chat_mode="deep_research", idle_timeout_s=600)
+        assert seen["chat_mode"] == "deep_research"
+        assert seen["timeout"] == 600
+
     def test_error_event_raises(self, monkeypatch):
         """SSE error event (high demand, internal error) -> ApiError jelas."""
         self._fake_state(monkeypatch)

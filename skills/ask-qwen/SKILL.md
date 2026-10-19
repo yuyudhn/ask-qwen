@@ -76,6 +76,14 @@ ask-qwen mode auto        # let Qwen decide
 
 Use `thinking` for complex reasoning tasks. Use `fast` when you just need a quick factual answer.
 
+### Deep Research
+
+```bash
+ask-qwen research "compare okta vs keycloak for a 500-person startup"
+```
+
+For questions that need current web data or broad comparison, `research` runs Qwen's deep-research mode: it searches the web and returns a cited answer. Much slower (minutes) and heavier on quota than `ask` — use it when freshness matters, not for reasoning you can do offline. Server "high demand" windows are retried automatically (3 attempts, 15s apart).
+
 ### Pipe Text In
 
 ```bash

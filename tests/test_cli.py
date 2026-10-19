@@ -62,7 +62,7 @@ class TestCommandDispatch:
     def test_ask(self, parser, capsys, monkeypatch):
         monkeypatch.setattr(
             api, "stream_ask",
-            lambda msg, on_delta=None: {"answer": f"answer:{msg}", "chat_id": "c1"},
+            lambda msg, **kw: {"answer": f"answer:{msg}", "chat_id": "c1"},
         )
         args = parser.parse_args(["ask", "ping"])
         args.func(args)
@@ -73,7 +73,7 @@ class TestCommandDispatch:
             "answer": "answer:ping", "chat_id": "c1", "response_id": "r1",
             "usage": {"output_tokens": 3}, "model": "qwen3.7-plus",
         }
-        monkeypatch.setattr(api, "stream_ask", lambda msg, on_delta=None: result)
+        monkeypatch.setattr(api, "stream_ask", lambda msg, **kw: result)
         args = parser.parse_args(["ask", "--json", "ping"])
         args.func(args)
         out = json.loads(capsys.readouterr().out)

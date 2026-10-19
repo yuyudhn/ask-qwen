@@ -44,6 +44,7 @@ ask-qwen ask "Explain the CAP theorem in 2 sentences"
 ask-qwen ask --json "Explain the CAP theorem"   # machine-readable: answer, chat_id, usage, model
 ask-qwen ask -v "..."                           # TTY: stream answer live; show think/code phases on stderr
 git diff | ask-qwen ask "review this" -          # pipe text via stdin ('-' marker)
+ask-qwen research "compare Postgres 18 vs MariaDB 12"   # deep research (slow, cited)
 ask-qwen ask "Give me a real-world example"     # continues the same chat
 
 ask-qwen new                                        # next ask starts a fresh chat
@@ -88,6 +89,7 @@ ask-qwen ask "What if I add a mutex around the send? Would that deadlock?"
 | Command | Description |
 |---|---|
 | `ask <message>` | Send a message and print the answer. |
+| `research <question>` | Deep research — searches the web, returns cited answer (slow). |
 | `read` | Print the active chat transcript (JSON). |
 | `new` | Start a new chat (reset conversation). |
 | `list [-n N]` | List recent chats. |

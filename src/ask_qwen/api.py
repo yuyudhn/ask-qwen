@@ -391,17 +391,21 @@ def _feature_config(state: dict) -> tuple[str, dict]:
     return model, fc
 
 
-def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase=None) -> dict:
+def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase=None,
+               chat_mode: str = "normal", idle_timeout_s: int | None = None) -> dict:
     """Kirim pesan ke Qwen dan stream jawabannya — murni HTTP, tanpa browser.
 
     - on_delta(chunk): callback teks answer-phase saat streaming.
     - on_phase(phase, chunk): callback fase non-answer ("think",
       "code_interpreter") — untuk tampilan progres di stderr.
+    - chat_mode: "normal" atau "deep_research" (riset mendalam, jauh lebih lama).
+    - idle_timeout_s: batas diam stream (default config.CHAT_IDLE_TIMEOUT_S;
+      deep research butuh lebih longgar karena fase thinking bisa panjang).
     - Lanjutkan chat dari state.json (active_chat_id) atau chat_id arg;
       buat chat baru bila belum ada.
     - Stop lintas-proses: state.json stop_requested (ditulis cmd stop).
-    - Return {"chat_id", "answer", "response_id", "usage"}; active_chat_id
-      di state diperbarui ke chat ini.
+    - Return {"chat_id", "answer", "response_id", "usage", "model"};
+      active_chat_id di state diperbarui ke chat ini.
     """
     import http.client
     import socket
@@ -454,7 +458,7 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
         "chatId": chat_id,
         "parentId": parent,
         "chat_id": chat_id,
-        "chat_mode": "normal",
+        "chat_mode": chat_mode,
         "model": model,
         "parent_id": parent,
         "messages": [{
@@ -476,7 +480,8 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
         "timestamp": ts,
     }
 
-    conn = http.client.HTTPSConnection("chat.qwen.ai", 443, timeout=config.CHAT_IDLE_TIMEOUT_S)
+    idle = idle_timeout_s or config.CHAT_IDLE_TIMEOUT_S
+    conn = http.client.HTTPSConnection("chat.qwen.ai", 443, timeout=idle)
     try:
         conn.request(
             "POST",
@@ -515,8 +520,11 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
             # high demand." — jangan diam-diam jadi jawaban kosong.
             err = obj.get("error")
             if err:
-                msg = err.get("message") if isinstance(err, dict) else str(err)
-                raise ApiError(msg or "stream error")
+                if isinstance(err, dict):
+                    msg = err.get("message") or err.get("detail") or json.dumps(err, ensure_ascii=False)
+                else:
+                    msg = str(err)
+                raise ApiError(msg)
             created = obj.get("response.created") or {}
             if created.get("response_id"):
                 response_id = created["response_id"]

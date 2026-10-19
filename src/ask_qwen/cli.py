@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import threading
+import time
 
 from . import api, auth, config
 
@@ -12,9 +13,9 @@ def _print_json(data) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
 
 
-def _run(func, *args):
+def _run(func, *args, **kwargs):
     try:
-        return func(*args)
+        return func(*args, **kwargs)
     except (api.ApiError, auth.AuthError, ValueError) as e:
         print(f"Error: {e}", file=sys.stderr)
         raise SystemExit(1)
@@ -73,7 +74,34 @@ def _resolve_message(parts: list) -> str:
 
 
 def cmd_ask(args) -> None:
+    _ask_impl(args, chat_mode="normal")
+
+
+def cmd_research(args) -> None:
+    # Deep research: jauh lebih lama, fase thinking/riset bisa diam >120s.
+    _ask_impl(args, chat_mode="deep_research", idle_timeout_s=600)
+
+
+def _ask_impl(args, chat_mode: str = "normal", idle_timeout_s: int | None = None) -> None:
     message = _run(_resolve_message, list(args.message))
+    # Retry bounded bila server kena high demand (umum di jam sibuk, terutama
+    # deep research yang berat). Percobaan gagal tidak menulis node baru, jadi
+    # retry aman terhadap rantai percakapan.
+    attempts = 3
+    for i in range(1, attempts + 1):
+        try:
+            _ask_once(args, message, chat_mode, idle_timeout_s)
+            return
+        except (api.ApiError, auth.AuthError, ValueError) as e:
+            transient = "high demand" in str(e).lower() or "quota" in str(e).lower()
+            if not transient or i == attempts:
+                print(f"Error: {e}", file=sys.stderr)
+                raise SystemExit(1)
+            print(f"Server sibuk ({i}/{attempts - 1}), coba lagi dalam 15s...", file=sys.stderr)
+            time.sleep(15)
+
+
+def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None) -> None:
     if sys.stdout.isatty() and not args.json:
         # TTY: jawaban mengalir langsung ke stdout; --verbose menampilkan
         # fase think/code_interpreter ke stderr. Piped: tetap satu jawaban
@@ -107,7 +135,8 @@ def cmd_ask(args) -> None:
 
         on_phase = _verbose if args.verbose else None
         try:
-            result = api.stream_ask(message, on_delta=_live, on_phase=on_phase)
+            result = api.stream_ask(message, on_delta=_live, on_phase=on_phase,
+                                    chat_mode=chat_mode, idle_timeout_s=idle_timeout_s)
         except (api.ApiError, auth.AuthError, ValueError) as e:
             print(f"Error: {e}", file=sys.stderr)
             raise SystemExit(1)
@@ -119,7 +148,8 @@ def cmd_ask(args) -> None:
             print(result["answer"])
     else:
         with _Spinner():
-            result = _run(api.stream_ask, message)
+            result = _run(api.stream_ask, message, chat_mode=chat_mode,
+                          idle_timeout_s=idle_timeout_s)
         if args.json:
             _print_json(result)
         else:
@@ -330,6 +360,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="Machine-readable output (answer, chat_id, usage, model)")
     p.add_argument("-v", "--verbose", action="store_true", help="Show thinking/code_interpreter phases on stderr (TTY)")
     p.set_defaults(func=cmd_ask)
+
+    p = sub.add_parser("research", help="Deep-research a question (much slower, searches the web)")
+    p.add_argument("message", nargs="+", help="Research question; '-' inserts piped stdin")
+    p.add_argument("--json", action="store_true", help="Machine-readable output")
+    p.add_argument("-v", "--verbose", action="store_true", help="Show research/thinking phases on stderr")
+    p.set_defaults(func=cmd_research)
 
     p = sub.add_parser("read", help="Read the active chat transcript")
     p.set_defaults(func=cmd_read)
