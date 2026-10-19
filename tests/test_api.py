@@ -142,6 +142,40 @@ class TestStreamAsk:
         with pytest.raises(ValueError):
             api.stream_ask("toolong")
 
+    def test_error_event_raises(self, monkeypatch):
+        """SSE error event (high demand, internal error) -> ApiError jelas."""
+        self._fake_state(monkeypatch)
+        monkeypatch.setattr(api.auth, "access_token", lambda: "tok")
+        monkeypatch.setattr(
+            api, "_request", lambda m, p, payload=None: {"id": "chat-new"},
+        )
+
+        class FakeResp:
+            status = 200
+            _lines = [b'data: {"error": {"message": "high demand, retry later"}}\n', b""]
+
+            def readline(self):
+                return self._lines.pop(0) if self._lines else b""
+
+        class FakeConn:
+            def __init__(self, *a, **k):
+                pass
+
+            def request(self, *a, **k):
+                pass
+
+            def getresponse(self):
+                return FakeResp()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("http.client.HTTPSConnection", FakeConn)
+        import pytest
+
+        with pytest.raises(api.ApiError, match="high demand"):
+            api.stream_ask("halo")
+
 
 class TestLifecycle:
     def test_delete_single_and_batch(self, monkeypatch):

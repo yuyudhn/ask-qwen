@@ -108,6 +108,9 @@ def cmd_ask(args) -> None:
         on_phase = _verbose if args.verbose else None
         try:
             result = api.stream_ask(message, on_delta=_live, on_phase=on_phase)
+        except (api.ApiError, auth.AuthError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(1)
         finally:
             _stop_spinner()
         if not first["answer"]:  # sudah streaming — cukup newline penutup

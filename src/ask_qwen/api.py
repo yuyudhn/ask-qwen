@@ -510,6 +510,13 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
                 continue
             if obj.get("success") is False:
                 raise ApiError(str((obj.get("data") or {}).get("details", obj)))
+            # Error event dari model service, mis. "Oops! There was an issue
+            # connecting to Qwen3.7-Plus. The service is currently experiencing
+            # high demand." — jangan diam-diam jadi jawaban kosong.
+            err = obj.get("error")
+            if err:
+                msg = err.get("message") if isinstance(err, dict) else str(err)
+                raise ApiError(msg or "stream error")
             created = obj.get("response.created") or {}
             if created.get("response_id"):
                 response_id = created["response_id"]
