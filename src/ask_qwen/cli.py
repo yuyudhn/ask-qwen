@@ -56,8 +56,24 @@ class _Spinner:
 # -- commands -----------------------------------------------------------------
 
 
+def _resolve_message(parts: list) -> str:
+    """Ganti kata '-' dengan konten stdin (pipes).
+
+    `git diff | ask-qwen ask "review this" -` → pesan berisi instruksi +
+    diff. Hanya baca stdin bila '-' eksplisit — tidak pernah blokir TTY.
+    """
+    if "-" not in parts:
+        return " ".join(parts)
+    if sys.stdin.isatty():
+        raise ValueError("arg '-' membutuhkan konten dari pipe/stdin")
+    data = sys.stdin.read()
+    if not data.strip():
+        raise ValueError("stdin kosong")
+    return " ".join(data if p == "-" else p for p in parts)
+
+
 def cmd_ask(args) -> None:
-    message = " ".join(args.message)
+    message = _run(_resolve_message, list(args.message))
     if sys.stdout.isatty() and not args.json:
         # TTY: jawaban mengalir langsung ke stdout; --verbose menampilkan
         # fase think/code_interpreter ke stderr. Piped: tetap satu jawaban
@@ -307,7 +323,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     p = sub.add_parser("ask", help="Send a message and get the answer")
-    p.add_argument("message", nargs="+", help="Message to send")
+    p.add_argument("message", nargs="+", help="Message to send; use '-' as a word to insert piped stdin")
     p.add_argument("--json", action="store_true", help="Machine-readable output (answer, chat_id, usage, model)")
     p.add_argument("-v", "--verbose", action="store_true", help="Show thinking/code_interpreter phases on stderr (TTY)")
     p.set_defaults(func=cmd_ask)

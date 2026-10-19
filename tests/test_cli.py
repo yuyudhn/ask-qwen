@@ -1,6 +1,7 @@
 """Tests for the CLI layer: argument parsing and command dispatch."""
 
 import json
+import sys
 
 import pytest
 
@@ -29,6 +30,32 @@ class TestArgParsing:
         with pytest.raises(SystemExit) as exc:
             cli.main()
         assert exc.value.code == 1
+
+
+class TestResolveMessage:
+    def test_marker_inserts_stdin(self, monkeypatch):
+        import io
+
+        monkeypatch.setattr(sys, "stdin", io.StringIO("line1\nline2"))
+        assert cli._resolve_message(["review", "-"]) == "review line1\nline2"
+
+    def test_marker_any_position(self, monkeypatch):
+        import io
+
+        monkeypatch.setattr(sys, "stdin", io.StringIO("DIFF"))
+        assert cli._resolve_message(["-", "is it ok?"]) == "DIFF is it ok?"
+
+    def test_no_marker_leaves_message(self):
+        assert cli._resolve_message(["just", "text"]) == "just text"
+
+    def test_marker_on_tty_errors(self, monkeypatch):
+        import io
+
+        fake = io.StringIO("data")
+        fake.isatty = lambda: True
+        monkeypatch.setattr(sys, "stdin", fake)
+        with pytest.raises(ValueError):
+            cli._resolve_message(["-", "x"])
 
 
 class TestCommandDispatch:

@@ -76,6 +76,15 @@ ask-qwen mode auto        # let Qwen decide
 
 Use `thinking` for complex reasoning tasks. Use `fast` when you just need a quick factual answer.
 
+### Pipe Text In
+
+```bash
+git diff | ask-qwen ask "review this diff" -
+cat error.log | ask-qwen ask "what's causing this?" -
+```
+
+Use `-` as a word in the message to insert piped stdin. Best for code, logs, and configs — anything you can `cat`. Binary documents (PDF/images) would need file attachment instead. Never pipe secrets you wouldn't want in the transcript.
+
 ### Machine-Readable Output
 
 ```bash
