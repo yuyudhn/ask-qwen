@@ -128,7 +128,7 @@ def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None,
         def _end_thinking() -> None:
             if state["thinking"]:
                 state["thinking"] = False
-                sys.stderr.write("\033[0m\n")  # matikan dim
+                sys.stderr.write("\033[0m\n\n")  # matikan dim + pisah dari jawaban
                 sys.stderr.flush()
 
         def _live(chunk: str) -> None:
@@ -141,16 +141,17 @@ def _ask_once(args, message: str, chat_mode: str, idle_timeout_s: int | None,
             print(chunk, end="", flush=True)
 
         def _think(phase: str, chunk: str) -> None:
-            # proses berpikir: stderr redup — jelas berbeda dari jawaban
+            # proses berpikir: stderr redup + indent bar — beda nyata dari
+            # jawaban walau tanpa warna / setelah copy-paste
             _stop_spinner()
             if not state["thinking"]:
                 state["thinking"] = True
-                sys.stderr.write("\033[2m")  # dim on
+                sys.stderr.write("\033[2m💭\n  ┊ ")
             if state["phase"] != phase:
                 state["phase"] = phase
-                marker = "💭" if phase == "think" else f"· {phase}"
-                sys.stderr.write(f"\n{marker} ")
-            sys.stderr.write(chunk)
+                if phase != "think":
+                    sys.stderr.write(f"\n  ┊ · {phase} · ")
+            sys.stderr.write(chunk.replace("\n", "\n  ┊ "))
             sys.stderr.flush()
 
         try:
