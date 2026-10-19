@@ -57,6 +57,13 @@ ask-qwen clone <id>          # duplicate a chat
 ask-qwen share <id>          # print a public share link
 ask-qwen delete <id> [more…] # delete permanently (asks; --yes when piped)
 
+ask-qwen project                        # list projects (* = active)
+ask-qwen project new "Research X"       # create a project
+ask-qwen project open <id>              # activate — asks/new land inside it
+ask-qwen project add <chat-id>          # move a chat into the active project
+ask-qwen project chats <id>             # list chats in a project
+ask-qwen project close                  # detach active project
+
 ask-qwen mode thinking                              # thinking mode: auto | thinking | fast
 ask-qwen model                                      # list models (* = active)
 ask-qwen model qwen3.6-plus                         # set model for future asks
@@ -94,6 +101,7 @@ ask-qwen ask "What if I add a mutex around the send? Would that deadlock?"
 | `clone <url\|id>` | Duplicate a chat; prints the new chat URL. |
 | `share <url\|id>` | Create a public share link. |
 | `delete <url\|id> […]` | Delete chats permanently (confirms on TTY; `--yes` when piped). |
+| `project [list\|new\|open\|close\|add\|chats\|delete]` | Organize chats into projects. |
 | `login` | Sign in via Qwen API. |
 
 ## Limitations & Risks

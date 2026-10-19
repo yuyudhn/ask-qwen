@@ -246,6 +246,46 @@ def cmd_share(args) -> None:
     print(url)
 
 
+def cmd_project(args) -> None:
+    sub = args.project_command
+    if sub == "list" or sub is None:
+        current = api.get_active_project()
+        projects = _run(api.list_projects)
+        if not projects:
+            print("Tidak ada project. Buat: ask-qwen project new \"Nama\"")
+            return
+        for p in projects:
+            mark = "*" if p["id"] == current else " "
+            print(f"{mark} {p['id']}  {p.get('name') or '(unnamed)'}  ({p.get('chat_count') or 0} chats)")
+    elif sub == "new":
+        pid = _run(api.create_project, args.name)
+        print(f"Project dibuat: {pid}")
+    elif sub == "open":
+        api.set_active_project(args.id)
+        print(f"Project aktif: {args.id} — ask/new berikutnya membuat chat di dalamnya.")
+    elif sub == "close":
+        api.set_active_project(None)
+        print("Project aktif dilepas.")
+    elif sub == "add":
+        pid = args.project or api.get_active_project()
+        if not pid:
+            print("Error: tidak ada project aktif — pakai --project <id>.", file=sys.stderr)
+            raise SystemExit(1)
+        chat_id = _run(api.parse_chat_id, args.url)
+        _run(api.add_chat_to_project, pid, chat_id)
+        print(f"Chat {chat_id} masuk project {pid}.")
+    elif sub == "chats":
+        _print_json(_run(api.project_chats, args.id))
+    elif sub == "delete":
+        if not args.yes:
+            print("Error: hapus project butuh --yes (aksi destruktif).", file=sys.stderr)
+            raise SystemExit(1)
+        _run(api.delete_project, args.id)
+        if api.get_active_project() == args.id:
+            api.set_active_project(None)
+        print(f"Project terhapus: {args.id}")
+
+
 def cmd_login(args) -> None:
     import getpass
 
@@ -328,6 +368,31 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("share", help="Create a public share link for a chat")
     p.add_argument("url", help="Chat id or URL")
     p.set_defaults(func=cmd_share)
+
+    p = sub.add_parser("project", help="Organize chats into projects")
+    psub = p.add_subparsers(dest="project_command")
+    p.set_defaults(func=cmd_project, project_command=None)
+    q = psub.add_parser("list", help="List projects (* = active)")
+    q.set_defaults(project_command="list")
+    q = psub.add_parser("new", help="Create a project")
+    q.add_argument("name", help="Project name")
+    q.set_defaults(project_command="new")
+    q = psub.add_parser("open", help="Make a project active (future asks create chats inside)")
+    q.add_argument("id", help="Project id")
+    q.set_defaults(project_command="open")
+    q = psub.add_parser("close", help="Detach the active project")
+    q.set_defaults(project_command="close")
+    q = psub.add_parser("add", help="Move a chat into a project")
+    q.add_argument("url", help="Chat id or URL")
+    q.add_argument("--project", help="Project id (default: active project)")
+    q.set_defaults(project_command="add")
+    q = psub.add_parser("chats", help="List chats inside a project")
+    q.add_argument("id", help="Project id")
+    q.set_defaults(project_command="chats")
+    q = psub.add_parser("delete", help="Delete a project (destructive, needs --yes)")
+    q.add_argument("id", help="Project id")
+    q.add_argument("--yes", action="store_true", help="Confirm deletion")
+    q.set_defaults(project_command="delete")
 
     p = sub.add_parser("login", help="Sign in via Qwen API")
     p.add_argument("--email", help="Qwen account email")

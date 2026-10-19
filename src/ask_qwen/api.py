@@ -120,6 +120,53 @@ def chat_exists(chat_id: str) -> bool:
         return False
 
 
+# -- projects ------------------------------------------------------------------
+
+
+def list_projects(limit: int = 50) -> list[dict]:
+    data = _request("GET", "/api/v2/projects/?page=1&page_size={}".format(min(limit, 100)))
+    items = data if isinstance(data, list) else (data.get("projects") or data.get("data") or [])
+    out = []
+    for p in items if isinstance(items, list) else []:
+        if isinstance(p, dict):
+            out.append({"id": p.get("id"), "name": p.get("name"),
+                        "chat_count": p.get("chat_count") or p.get("chatCount"),
+                        "updated_at": p.get("updated_at")})
+    return out
+
+
+def create_project(name: str) -> str:
+    data = _request("POST", "/api/v2/projects/", {"name": name})
+    return data["id"] if isinstance(data, dict) else str(data)
+
+
+def delete_project(project_id: str) -> None:
+    _request("DELETE", f"/api/v2/projects/{project_id}")
+
+
+def add_chat_to_project(project_id: str, chat_id: str) -> None:
+    _request("POST", "/api/v2/projects/add_chat", {
+        "project_id": project_id, "chat_ids": [chat_id],
+    })
+
+
+def project_chats(project_id: str, limit: int = 50) -> list[dict]:
+    """Chat di dalam project (endpoint chats dengan filter project)."""
+    data = _request("GET", f"/api/v2/chats?project_id={project_id}&page=1")
+    items = data if isinstance(data, list) else []
+    return [_chat_item(c) for c in items if isinstance(c, dict)][:limit]
+
+
+def set_active_project(project_id: str | None) -> None:
+    state = load_state()
+    state["active_project_id"] = project_id
+    save_state(state)
+
+
+def get_active_project() -> str | None:
+    return load_state().get("active_project_id")
+
+
 # -- chat lifecycle -----------------------------------------------------------
 
 
@@ -394,7 +441,9 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
         except ApiError:
             chat_id = None  # chat terhapus/diarsipkan — mulai chat baru
     if not chat_id:
-        chat_id = _request("POST", "/api/v2/chats/new", {"chat_mode": "normal", "project_id": None})["id"]
+        project_id = state.get("active_project_id")
+        payload = {"chat_mode": "normal", "project_id": project_id}
+        chat_id = _request("POST", "/api/v2/chats/new", payload)["id"]
 
     model, fc = _feature_config(state)
     ts = int(time.time())
