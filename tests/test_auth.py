@@ -124,18 +124,10 @@ class TestSessionOk:
 
     def test_true_when_api_accepts_bearer(self, tmp_path, monkeypatch):
         self._save(tmp_path, monkeypatch)
-
-        class FakeResp:
-            def read(self):
-                return b'{"success": true}'
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-
-        monkeypatch.setattr(auth.urllib.request, "urlopen", lambda req, timeout: FakeResp())
+        monkeypatch.setattr(
+            auth.transport, "request",
+            lambda *a, **k: (200, b'{"success": true}'),
+        )
         assert auth.session_ok() is True
 
     def test_false_without_token(self, tmp_path, monkeypatch):
@@ -145,8 +137,8 @@ class TestSessionOk:
     def test_false_on_api_error(self, tmp_path, monkeypatch):
         self._save(tmp_path, monkeypatch)
 
-        def boom(req, timeout):
-            raise auth.urllib.error.URLError("down")
+        def boom(*a, **k):
+            raise auth.transport.HttpError("down")
 
-        monkeypatch.setattr(auth.urllib.request, "urlopen", boom)
+        monkeypatch.setattr(auth.transport, "request", boom)
         assert auth.session_ok() is False

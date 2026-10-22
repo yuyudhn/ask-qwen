@@ -90,6 +90,17 @@ class TestStreamAsk:
         monkeypatch.setattr(api, "set_active_chat", lambda cid: box.update(active_chat_id=cid))
         return box
 
+    def _fake_stream(self, monkeypatch, lines, seen):
+        """Palsukan transport.stream: catat argumen, yield baris SSE."""
+        def fake_stream(method, url, headers, data, idle_timeout_s, total_timeout_s=900):
+            seen["method"] = method
+            seen["url"] = url
+            seen["headers"] = headers
+            seen["data"] = data
+            seen["idle"] = idle_timeout_s
+            return iter(lines)
+        monkeypatch.setattr(api.transport, "stream", fake_stream)
+
     def test_asks_and_collects_answer(self, monkeypatch):
         box = self._fake_state(monkeypatch)
         monkeypatch.setattr(api.auth, "access_token", lambda: "tok")
@@ -97,39 +108,19 @@ class TestStreamAsk:
             api, "_request", lambda m, p, payload=None: {"id": "chat-new"} if "chats/new" in p else {},
         )
 
-        class FakeResp:
-            status = 200
+        seen = {}
+        self._fake_stream(monkeypatch, [l for l in self.SSE.splitlines() if l], seen)
 
-            def readline(self):
-                if self._lines:
-                    return self._lines.pop(0)
-                return b""
-
-            _lines = [l.encode() + b"\n" for l in self.SSE.splitlines()]
-
-        class FakeConn:
-            def __init__(self, *a, **k):
-                pass
-
-            def request(self, *a, **k):
-                body = json.loads(k["body"])
-                assert body["chatId"] == "chat-new"
-                assert body["messages"][0]["content"] == "halo"
-                assert body["messages"][0]["feature_config"]["output_schema"] == "phase"
-
-            def getresponse(self):
-                return FakeResp()
-
-            def close(self):
-                pass
-
-        monkeypatch.setattr("http.client.HTTPSConnection", FakeConn)
         deltas = []
         result = api.stream_ask("halo", on_delta=deltas.append)
         assert result["answer"] == "Hello"
         assert deltas == ["Hel", "lo"]
         assert result["response_id"] == "resp-1"
         assert box["active_chat_id"] == "chat-new"
+        body = json.loads(seen["data"])
+        assert body["chatId"] == "chat-new"
+        assert body["messages"][0]["content"] == "halo"
+        assert body["messages"][0]["feature_config"]["output_schema"] == "phase"
 
     def test_rejects_empty_and_oversized(self, monkeypatch):
         self._fake_state(monkeypatch)
@@ -154,30 +145,10 @@ class TestStreamAsk:
 
         monkeypatch.setattr(api, "_request", fake_request)
 
-        class FakeResp:
-            status = 200
-
-            def readline(self):
-                return b""
-
-        class FakeConn:
-            def __init__(self, *a, **k):
-                seen["timeout"] = k.get("timeout")
-
-            def request(self, *a, **k):
-                body = json.loads(k["body"])
-                seen["chat_mode"] = body["chat_mode"]
-
-            def getresponse(self):
-                return FakeResp()
-
-            def close(self):
-                pass
-
-        monkeypatch.setattr("http.client.HTTPSConnection", FakeConn)
+        self._fake_stream(monkeypatch, [], seen)
         api.stream_ask("riset", chat_mode="deep_research", idle_timeout_s=600)
-        assert seen["chat_mode"] == "deep_research"
-        assert seen["timeout"] == 600
+        assert json.loads(seen["data"])["chat_mode"] == "deep_research"
+        assert seen["idle"] == 600
 
     def test_error_event_raises(self, monkeypatch):
         """SSE error event (high demand, internal error) -> ApiError jelas."""
@@ -186,28 +157,11 @@ class TestStreamAsk:
         monkeypatch.setattr(
             api, "_request", lambda m, p, payload=None: {"id": "chat-new"},
         )
-
-        class FakeResp:
-            status = 200
-            _lines = [b'data: {"error": {"message": "high demand, retry later"}}\n', b""]
-
-            def readline(self):
-                return self._lines.pop(0) if self._lines else b""
-
-        class FakeConn:
-            def __init__(self, *a, **k):
-                pass
-
-            def request(self, *a, **k):
-                pass
-
-            def getresponse(self):
-                return FakeResp()
-
-            def close(self):
-                pass
-
-        monkeypatch.setattr("http.client.HTTPSConnection", FakeConn)
+        self._fake_stream(
+            monkeypatch,
+            ['data: {"error": {"message": "high demand, retry later"}}'],
+            {},
+        )
         import pytest
 
         with pytest.raises(api.ApiError, match="high demand"):
@@ -294,7 +248,7 @@ class TestUploadFile:
             def __exit__(self, *a):
                 return False
 
-        monkeypatch.setattr(api.urllib.request, "urlopen", lambda req, timeout: FakeResp())
+        monkeypatch.setattr(api.transport, "request", lambda *a, **k: (200, b""))
         monkeypatch.setattr(api, "_jwt_user_id", lambda: "uid-1")
         return f
 

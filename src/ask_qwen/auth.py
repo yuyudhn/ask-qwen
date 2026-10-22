@@ -9,11 +9,9 @@ import base64
 import hashlib
 import json
 import time
-import urllib.error
-import urllib.request
 import uuid
 
-from . import config
+from . import config, transport
 
 
 class AuthError(Exception):
@@ -52,19 +50,15 @@ def _request(path: str, payload: dict, token: str | None = None) -> dict:
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(
-        config.AUTH_URL + path,
-        data=json.dumps(payload).encode(),
-        headers=headers,
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        raise AuthError(f"HTTP {e.code}: {e.read()[:200]!r}") from e
-    except urllib.error.URLError as e:
-        raise AuthError(f"koneksi gagal: {e.reason}") from e
+        _, raw = transport.request(
+            "POST", config.AUTH_URL + path, headers, json.dumps(payload).encode(), timeout=30,
+        )
+        body = json.loads(raw)
+    except transport.HttpError as e:
+        raise AuthError(str(e)) from e
+    except ValueError:
+        raise AuthError(f"respons bukan JSON: {raw[:120]!r}")
     if not body.get("success"):
         data = body.get("data") or {}
         raise AuthError(f"{data.get('code', 'error')}: {data.get('details', body)}")
@@ -140,22 +134,23 @@ def session_ok() -> bool:
     token = access_token()
     if not token:
         return False
-    req = urllib.request.Request(
-        config.BASE_URL + "/api/v2/users/status",
-        headers={
-            "Accept": "application/json",
-            "Authorization": f"Bearer {token}",
-            "Version": config.API_VERSION,
-            "source": "web",
-            "X-Request-Id": str(uuid.uuid4()),
-            "Timezone": _timezone(),
-            "User-Agent": config.API_UA,
-            "app_waf": config.APP_WAF_TOKEN,
-        },
-        method="GET",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return bool(json.loads(resp.read()).get("success"))
+        _, raw = transport.request(
+            "GET",
+            config.BASE_URL + "/api/v2/users/status",
+            {
+                "Accept": "application/json",
+                "Authorization": f"Bearer {token}",
+                "Version": config.API_VERSION,
+                "source": "web",
+                "X-Request-Id": str(uuid.uuid4()),
+                "Timezone": _timezone(),
+                "User-Agent": config.API_UA,
+                "app_waf": config.APP_WAF_TOKEN,
+            },
+            b"",
+            timeout=15,
+        )
+        return bool(json.loads(raw).get("success"))
     except Exception:
         return False

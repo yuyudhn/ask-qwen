@@ -10,11 +10,9 @@ import json
 import pathlib
 import re
 import time
-import urllib.error
-import urllib.request
 import uuid
 
-from . import auth, config
+from . import auth, config, transport
 
 
 class ApiError(Exception):
@@ -35,30 +33,26 @@ def _request(method: str, path: str, payload: dict | None = None) -> dict:
     token = auth.access_token()
     if not token:
         raise ApiError("belum login — jalankan: ask-qwen login")
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(
-        config.BASE_URL + path,
-        data=data,
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-            "Version": config.API_VERSION,
-            "source": "web",
-            "X-Request-Id": str(uuid.uuid4()),
-            "Timezone": auth._timezone(),
-            "User-Agent": config.API_UA,
-            "app_waf": config.APP_WAF_TOKEN,
-        },
-        method=method,
-    )
+    data = json.dumps(payload).encode() if payload is not None else b""
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+        "Version": config.API_VERSION,
+        "source": "web",
+        "X-Request-Id": str(uuid.uuid4()),
+        "Timezone": auth._timezone(),
+        "User-Agent": config.API_UA,
+        "app_waf": config.APP_WAF_TOKEN,
+    }
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        raise ApiError(f"HTTP {e.code}: {e.read()[:200]!r}") from e
-    except urllib.error.URLError as e:
-        raise ApiError(f"koneksi gagal: {e.reason}") from e
+        _, raw = transport.request(method, config.BASE_URL + path, headers, data, timeout=30)
+    except transport.HttpError as e:
+        raise ApiError(str(e)) from e
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise ApiError(f"respons bukan JSON: {raw[:120]!r}")
     if not body.get("success"):
         data_ = body.get("data") or {}
         raise ApiError(f"{data_.get('code', 'error')}: {data_.get('details', body)}")
@@ -287,25 +281,22 @@ def upload_file(path) -> dict:
     host = f"{bucket}.{endpoint}" if not endpoint.startswith("http") else endpoint.replace("https://", f"{bucket}.")
     date = email.utils.formatdate(usegmt=True)
     resource = f"/{bucket}/{obj_key}"
-    req = urllib.request.Request(
-        f"https://{host}/{obj_key}", data=content,
-        headers={
-            "Date": date,
-            "Content-Type": mime,
-            "Authorization": "OSS {}:{}".format(
-                td["access_key_id"],
-                _oss_sign("PUT", mime, date, resource, td["access_key_secret"], td["security_token"]),
-            ),
-            "x-oss-security-token": td["security_token"],
-        },
-        method="PUT",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            if resp.status not in (200, 201):
-                raise ApiError(f"OSS upload HTTP {resp.status}")
-    except urllib.error.HTTPError as e:
-        raise ApiError(f"OSS upload gagal: HTTP {e.code}: {e.read()[:200]!r}") from e
+        transport.request(
+            "PUT", f"https://{host}/{obj_key}",
+            {
+                "Date": date,
+                "Content-Type": mime,
+                "Authorization": "OSS {}:{}".format(
+                    td["access_key_id"],
+                    _oss_sign("PUT", mime, date, resource, td["access_key_secret"], td["security_token"]),
+                ),
+                "x-oss-security-token": td["security_token"],
+            },
+            content, timeout=300,
+        )
+    except transport.HttpError as e:
+        raise ApiError(f"OSS upload gagal: {e}") from e
 
     _request("POST", "/api/v2/files/parse", {"file_id": file_id})
     _wait_parsed([file_id])
@@ -528,8 +519,6 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
     - Return {"chat_id", "answer", "response_id", "usage", "model"};
       active_chat_id di state diperbarui ke chat ini.
     """
-    import http.client
-    import socket
     import time
 
     if not isinstance(message, str) or not message.strip():
@@ -602,29 +591,18 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
     }
 
     idle = idle_timeout_s or config.CHAT_IDLE_TIMEOUT_S
-    conn = http.client.HTTPSConnection("chat.qwen.ai", 443, timeout=idle)
+    answer_parts: list[str] = []
+    usage: dict = {}
+    response_id: str | None = None
     try:
-        conn.request(
+        lines = transport.stream(
             "POST",
-            f"/api/v2/chat/completions?chat_id={chat_id}",
-            body=json.dumps(body).encode(),
-            headers=_chat_headers(token),
+            f"{config.BASE_URL}/api/v2/chat/completions?chat_id={chat_id}",
+            _chat_headers(token),
+            json.dumps(body).encode(),
+            idle_timeout_s=idle,
         )
-        resp = conn.getresponse()
-        if resp.status != 200:
-            raise ApiError(f"HTTP {resp.status}: {resp.read()[:200]!r}")
-
-        answer_parts: list[str] = []
-        usage: dict = {}
-        response_id: str | None = None
-        while True:
-            try:
-                line = resp.readline()
-            except (socket.timeout, TimeoutError):
-                break  # diam lebih dari CHAT_IDLE_TIMEOUT_S — anggap selesai/hang
-            if not line:
-                break
-            line = line.decode("utf-8", "replace").strip()
+        for line in lines:
             if not line.startswith("data:"):
                 continue
             payload = line[5:].strip()
@@ -674,8 +652,8 @@ def stream_ask(message: str, on_delta=None, chat_id: str | None = None, on_phase
                 state.pop("stop_requested", None)
                 save_state(state)
                 break
-    finally:
-        conn.close()
+    except transport.HttpError as e:
+        raise ApiError(str(e)) from e
 
     answer = "".join(answer_parts)
     set_active_chat(chat_id)
